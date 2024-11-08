@@ -82,7 +82,7 @@ const controller = new WebsiteController();
 
 export async function GET(
   request: Request,
-  { params }: WebsiteRouteParams
+  { params }: any
 ): Promise<NextResponse<ApiResponse<Website>>> {
   try {
     const { id } = params;
@@ -113,7 +113,7 @@ export async function GET(
 
 export async function POST(
   request: Request,
-  { params }: WebsiteRouteParams
+  { params }: any
 ): Promise<NextResponse<ApiResponse<Website>>> {
   try {
     const id = (await params).id;
@@ -155,7 +155,7 @@ export async function POST(
 
 export async function DELETE(
   request: Request,
-  { params }: WebsiteRouteParams
+  { params }: any
 ): Promise<NextResponse<SuccessResponse | ErrorResponse>> {
   try {
     const id = (await params).id;

@@ -10,7 +10,7 @@ interface RouteParams {
 
 export async function POST(
   request: Request,
-  { params }: RouteParams
+  { params }: any
 ): Promise<NextResponse<ApiResponse<{ success: boolean }>>> {
   try {
     const { hidden } = await request.json();

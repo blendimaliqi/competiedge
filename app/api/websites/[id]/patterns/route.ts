@@ -8,7 +8,7 @@ import {
 
 export async function POST(
   request: Request,
-  { params }: WebsiteRouteParams
+  { params }: any
 ): Promise<NextResponse<ApiResponse<Website>>> {
   try {
     const id = (await params).id;
