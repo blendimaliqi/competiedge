@@ -1,4 +1,5 @@
-import puppeteer, { Page } from "puppeteer";
+import puppeteer, { Page, Browser } from "puppeteer-core";
+import chrome from "@sparticuz/chromium";
 import { Article } from "@/lib/types";
 
 export class DynamicScraper {
@@ -121,7 +122,7 @@ export class DynamicScraper {
     }
 
     // Check for meaningful content as a fallback
-    const hasArticleContent = await page.evaluate((selectors) => {
+    const hasArticleContent = await page.evaluate((selectors: string[]) => {
       const elements = document.querySelectorAll(selectors.join(", "));
       let meaningfulContent = false;
 
@@ -145,36 +146,65 @@ export class DynamicScraper {
   }
 
   async scrape(url: string): Promise<{ title: string; articles: Article[] }> {
-    const browser = await puppeteer.launch({
-      headless: "new",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-web-security",
-        "--disable-features=IsolateOrigins,site-per-process",
-      ],
-    });
+    let browser: Browser | undefined;
 
     try {
+      let executablePath: string;
+      let args: string[];
+
+      if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
+        // Running on Lambda/Vercel
+        executablePath = await chrome.executablePath();
+        args = chrome.args;
+      } else {
+        // Running locally - use system Chrome
+        executablePath =
+          process.platform === "win32"
+            ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+            : process.platform === "darwin"
+            ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            : "/usr/bin/google-chrome";
+        args = [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-accelerated-2d-canvas",
+          "--no-first-run",
+          "--no-zygote",
+          "--disable-gpu",
+        ];
+      }
+
+      browser = await puppeteer.launch({
+        args,
+        executablePath,
+        headless: true,
+        defaultViewport: {
+          width: 1920,
+          height: 1080,
+        },
+      });
+
       const page = await browser.newPage();
-      await page.setViewport({ width: 1920, height: 1080 });
       await page.setUserAgent(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
       );
 
       console.log("Navigating to URL:", url);
-      await page.goto(url, { waitUntil: "networkidle0" });
+      await page.goto(url, {
+        waitUntil: "networkidle0",
+        timeout: 30000,
+      });
 
       // Wait for any content to load
       await page.waitForSelector(
         'article, [class*="article"], [class*="post"], h1, h2, h3',
-        { timeout: 10000 }
+        { timeout: 30000 }
       );
 
       const title = await page.title();
       console.log("Page title:", title);
 
-      // Check if it's a static site
       const isStatic = await this.isStaticSite(page);
 
       if (isStatic) {
@@ -183,7 +213,6 @@ export class DynamicScraper {
         return { title, articles };
       }
 
-      // For dynamic sites, wait for content and handle progressive loading
       let articles = await this.extractArticles(page);
       console.log(
         `Initially found ${articles.length} articles on dynamic site`
@@ -196,18 +225,17 @@ export class DynamicScraper {
       for (let i = 0; i < maxScrollAttempts; i++) {
         console.log(`Scroll attempt ${i + 1}/${maxScrollAttempts}`);
 
-        // Scroll to bottom
         await page.evaluate(() => {
           window.scrollTo(0, document.body.scrollHeight);
         });
 
-        // Wait for potential new content
-        await page.waitForTimeout(2000);
+        await page.evaluate(
+          () => new Promise((resolve) => setTimeout(resolve, 2000))
+        );
 
-        // Check for new content
         try {
           await page.waitForFunction(
-            (prevCount) => {
+            (prevCount: number) => {
               const elements = document.querySelectorAll(
                 'article, [class*="article"], [class*="post"], [role="article"]'
               );
@@ -220,7 +248,6 @@ export class DynamicScraper {
           // No new content loaded
         }
 
-        // Extract articles again
         articles = await this.extractArticles(page);
         console.log(`Found ${articles.length} articles after scroll ${i + 1}`);
 
@@ -242,17 +269,16 @@ export class DynamicScraper {
       return { title, articles };
     } catch (error) {
       console.error("Scraping error:", error);
-      return {
-        title: "Failed to load",
-        articles: [],
-      };
+      throw error;
     } finally {
-      await browser.close();
+      if (browser) {
+        await browser.close();
+      }
     }
   }
 
   private async extractArticles(page: Page): Promise<Article[]> {
-    return await page.evaluate((contentSelectors) => {
+    return await page.evaluate((contentSelectors: string[]) => {
       const articles: Array<{
         title: string;
         url: string;
@@ -353,7 +379,7 @@ export class DynamicScraper {
             return;
 
           const links = block.querySelectorAll("a[href]");
-          links.forEach((link) => {
+          links.forEach((link: Element) => {
             const anchor = link as HTMLAnchorElement;
             const url = anchor.href;
 

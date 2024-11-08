@@ -10,13 +10,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "URL is required" }, { status: 400 });
     }
 
-    const { title, articles } = await dynamicScraper.scrape(url);
+    try {
+      const { title, articles } = await dynamicScraper.scrape(url);
+      return NextResponse.json({ title, articles });
+    } catch (error) {
+      console.error("Dynamic scraping error:", error);
 
-    return NextResponse.json({ title, articles });
+      // Check if it's a Chrome executable error
+      if (
+        error instanceof Error &&
+        error.message.includes("Failed to launch")
+      ) {
+        return NextResponse.json(
+          {
+            error: "Browser initialization failed",
+            details:
+              process.env.NODE_ENV === "development"
+                ? error.message
+                : undefined,
+          },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json(
+        { error: "Failed to scrape website" },
+        { status: 500 }
+      );
+    }
   } catch (error) {
-    console.error("Dynamic scraping error:", error);
+    console.error("API route error:", error);
     return NextResponse.json(
-      { error: "Failed to scrape website" },
+      { error: "Internal server error" },
       { status: 500 }
     );
   }
