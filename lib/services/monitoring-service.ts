@@ -1,11 +1,39 @@
 import { supabase } from "@/lib/supabase";
 import { MonitoringRule, SocialMention } from "@/lib/types/monitoring";
+import { Resend } from "resend";
 
 export class MonitoringService {
+  private resend: Resend;
+
+  constructor() {
+    this.resend = new Resend(process.env.RESEND_API_KEY);
+  }
+
   private async sendEmail(to: string, subject: string, content: string) {
-    // Implement email sending using your preferred service
-    // Example: SendGrid, AWS SES, etc.
-    console.log(`Sending email to ${to}: ${subject}`);
+    if (!process.env.RESEND_API_KEY) {
+      console.log(`[DEV] Email to ${to}: ${subject}\n${content}`);
+      return;
+    }
+
+    try {
+      await this.resend.emails.send({
+        from: "CompetieEdge <onboarding@resend.dev>", // Default sender during testing
+        to: [to],
+        subject,
+        html: `
+          <div style="font-family: sans-serif; padding: 20px;">
+            <h2>${subject}</h2>
+            <p>${content}</p>
+            <hr>
+            <p style="color: #666; font-size: 12px;">
+              This is an automated alert from CompetieEdge
+            </p>
+          </div>
+        `,
+      });
+    } catch (error) {
+      console.error("Failed to send email:", error);
+    }
   }
 
   async checkArticleCountRule(rule: MonitoringRule) {
