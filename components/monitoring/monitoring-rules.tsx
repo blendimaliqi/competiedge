@@ -7,25 +7,38 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
+import { AlertCircle } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export function MonitoringRules({ websiteId }: { websiteId: string }) {
   const [newRule, setNewRule] = useState({
     type: "ARTICLE_COUNT",
     threshold: 0,
     keyword: "",
-    notifyEmail: "",
+    notifyEmail: "blendi.maliqi93@gmail.com",
   });
+  const [error, setError] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
 
-  const { data: rules } = useQuery({
-    queryKey: ["monitoringRules", websiteId],
-    queryFn: async () => {
-      const response = await fetch(
-        `/api/monitoring/rules?websiteId=${websiteId}`
-      );
-      if (!response.ok) throw new Error("Failed to fetch rules");
+  // Test email mutation
+  const testEmail = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/monitoring/test-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: newRule.notifyEmail }),
+      });
+      if (!response.ok) throw new Error("Failed to send test email");
       return response.json();
+    },
+    onSuccess: () => {
+      setError("Test email sent! Check your inbox.");
+    },
+    onError: (err) => {
+      setError(
+        err instanceof Error ? err.message : "Failed to send test email"
+      );
     },
   });
 
@@ -41,12 +54,38 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["monitoringRules"] });
+      setError("Rule created successfully!");
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "Failed to create rule");
     },
   });
 
   return (
     <div className="space-y-4">
-      <h3 className="text-lg font-semibold">Monitoring Rules</h3>
+      <div className="flex justify-between items-center">
+        <h3 className="text-lg font-semibold">Monitoring Rules</h3>
+        <Button
+          variant="outline"
+          onClick={() => testEmail.mutate()}
+          disabled={testEmail.isPending}
+        >
+          {testEmail.isPending ? "Sending..." : "Test Email"}
+        </Button>
+      </div>
+
+      {error && (
+        <Alert
+          variant={
+            error.includes("success") || error.includes("sent")
+              ? "default"
+              : "destructive"
+          }
+        >
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
       <Card className="p-4">
         <form
@@ -66,7 +105,6 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
           >
             <option value="ARTICLE_COUNT">Article Count</option>
             <option value="KEYWORD">Keyword</option>
-            <option value="SOCIAL_MENTIONS">Social Mentions</option>
           </Select>
 
           <Input
@@ -97,29 +135,11 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
             }
           />
 
-          <Button type="submit">Add Rule</Button>
+          <Button type="submit" disabled={createRule.isPending}>
+            {createRule.isPending ? "Creating..." : "Add Rule"}
+          </Button>
         </form>
       </Card>
-
-      <div className="space-y-2">
-        {rules?.map((rule: MonitoringRule) => (
-          <Card key={rule.id} className="p-4">
-            <div className="flex justify-between items-center">
-              <div>
-                <p className="font-medium">{rule.type}</p>
-                <p className="text-sm text-muted-foreground">
-                  Threshold: {rule.threshold}
-                  {rule.keyword && ` | Keyword: ${rule.keyword}`}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Notify: {rule.notifyEmail}
-                </p>
-              </div>
-              {/* Add edit/delete buttons here */}
-            </div>
-          </Card>
-        ))}
-      </div>
     </div>
   );
 }

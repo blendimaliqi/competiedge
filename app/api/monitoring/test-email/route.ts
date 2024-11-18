@@ -9,13 +9,14 @@ export async function POST(request: Request) {
       id: "test",
       websiteId: "test",
       type: "ARTICLE_COUNT",
-      threshold: 1,
+      threshold: 0, // Set to 0 to ensure it triggers
       enabled: true,
-      notifyEmail: email,
+      notifyEmail: "blendi.maliqi93@gmail.com",
     });
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error("Failed to send test email:", error);
     return NextResponse.json(
       { error: "Failed to send test email" },
       { status: 500 }
