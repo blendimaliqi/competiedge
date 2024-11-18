@@ -8,7 +8,19 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const secret = searchParams.get("secret");
 
+    console.log("Received secret:", secret);
+    console.log("Expected secret:", CRON_SECRET);
+
+    if (!CRON_SECRET) {
+      console.error("CRON_SECRET is not set in environment variables");
+      return NextResponse.json(
+        { error: "Server configuration error" },
+        { status: 500 }
+      );
+    }
+
     if (secret !== CRON_SECRET) {
+      console.error("Secret mismatch");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 

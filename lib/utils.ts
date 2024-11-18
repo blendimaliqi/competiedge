@@ -81,3 +81,10 @@ export function parseDate(dateStr: string | undefined): string {
     return new Date().toISOString();
   }
 }
+
+export function getCronUrl(baseUrl: string): string {
+  const secret = process.env.CRON_SECRET;
+  return `${baseUrl}/api/cron/check-monitoring?secret=${encodeURIComponent(
+    secret || ""
+  )}`;
+}
