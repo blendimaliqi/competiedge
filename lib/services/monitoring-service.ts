@@ -6,18 +6,23 @@ export class MonitoringService {
   private resend: Resend;
 
   constructor() {
+    console.log(
+      "Initializing Resend with API key:",
+      process.env.RESEND_API_KEY?.substring(0, 5) + "..."
+    );
     this.resend = new Resend(process.env.RESEND_API_KEY);
   }
 
   private async sendEmail(to: string, subject: string, content: string) {
     if (!process.env.RESEND_API_KEY) {
-      console.log(`[DEV] Email to ${to}: ${subject}\n${content}`);
+      console.error("No Resend API key found!");
       return;
     }
 
     try {
-      await this.resend.emails.send({
-        from: "CompetieEdge <onboarding@resend.dev>", // Default sender during testing
+      console.log("Attempting to send email:", { to, subject });
+      const data = await this.resend.emails.send({
+        from: "CompetieEdge <onboarding@resend.dev>",
         to: [to],
         subject,
         html: `
@@ -31,30 +36,51 @@ export class MonitoringService {
           </div>
         `,
       });
+      console.log("Email sent successfully:", data);
+      return data;
     } catch (error) {
       console.error("Failed to send email:", error);
+      throw error; // Re-throw to handle in the calling function
     }
   }
 
   async checkArticleCountRule(rule: MonitoringRule) {
-    const { data: website } = await supabase
-      .from("websites")
-      .select("article_count")
-      .eq("id", rule.websiteId)
-      .single();
+    try {
+      console.log("Checking article count rule:", rule);
 
-    if (website && website.article_count >= rule.threshold) {
-      await this.sendEmail(
-        rule.notifyEmail,
-        "Article Count Threshold Reached",
-        `Website ${rule.websiteId} has reached ${website.article_count} articles`
-      );
+      // For test emails, skip the website check
+      if (rule.websiteId === "test") {
+        await this.sendEmail(
+          rule.notifyEmail,
+          "Test Email from CompetieEdge",
+          "This is a test email to verify your monitoring setup is working correctly."
+        );
+        return;
+      }
 
-      // Update last triggered time
-      await supabase
-        .from("monitoring_rules")
-        .update({ last_triggered: new Date().toISOString() })
-        .eq("id", rule.id);
+      const { data: website } = await supabase
+        .from("websites")
+        .select("article_count")
+        .eq("id", rule.websiteId)
+        .single();
+
+      console.log("Website data:", website);
+
+      if (website && website.article_count >= rule.threshold) {
+        await this.sendEmail(
+          rule.notifyEmail,
+          "Article Count Threshold Reached",
+          `Website ${rule.websiteId} has reached ${website.article_count} articles`
+        );
+
+        await supabase
+          .from("monitoring_rules")
+          .update({ last_triggered: new Date().toISOString() })
+          .eq("id", rule.id);
+      }
+    } catch (error) {
+      console.error("Error in checkArticleCountRule:", error);
+      throw error;
     }
   }
 
