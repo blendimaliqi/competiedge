@@ -25,6 +25,7 @@ import {
   X,
   EyeOff,
 } from "lucide-react";
+import { MonitoringRules } from "@/components/monitoring/monitoring-rules";
 
 export function WebsiteCard({
   website,
@@ -414,6 +415,12 @@ export function WebsiteCard({
           </SelectContent>
         </Select>
       </div>
+
+      {editingPatterns === website.id && (
+        <div className="mt-4 border-t pt-4">
+          <MonitoringRules websiteId={website.id} />
+        </div>
+      )}
     </Card>
   );
 }
