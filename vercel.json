@@ -18,7 +18,7 @@
     },
     "app/api/cron/check-monitoring/route.ts": {
       "memory": 1024,
-      "maxDuration": 300
+      "maxDuration": 60
     }
   },
   "git": {
