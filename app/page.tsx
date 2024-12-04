@@ -1,5 +1,4 @@
 import { CompetitorDashboard } from "@/components/dashboard/competitor-dashboard";
-import { useEffect } from "react";
 
 export default function Home() {
   return (
