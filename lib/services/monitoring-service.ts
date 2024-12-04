@@ -110,24 +110,109 @@ export class MonitoringService {
     }
   }
 
+  async checkContentChangeRule(rule: MonitoringRule) {
+    try {
+      console.log("Checking content change rule:", rule);
+
+      // Get the website URL
+      const { data: website } = await supabase
+        .from("websites")
+        .select("url")
+        .eq("id", rule.websiteId)
+        .single();
+
+      if (!website?.url) {
+        console.error("Website not found");
+        return;
+      }
+
+      // Get the previous content analysis
+      const { data: previousAnalysis } = await supabase
+        .from("content_snapshots")
+        .select("*")
+        .eq("website_id", rule.websiteId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      // Get current content analysis
+      const response = await fetch(
+        process.env.NEXT_PUBLIC_APP_URL + "/api/analyze-content",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: website.url }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to analyze content");
+      }
+
+      const { metrics: currentMetrics } = await response.json();
+
+      // Store the new snapshot
+      const { data: newSnapshot, error: snapshotError } = await supabase
+        .from("content_snapshots")
+        .insert({
+          website_id: rule.websiteId,
+          metrics: currentMetrics,
+          created_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (snapshotError) {
+        console.error("Error storing snapshot:", snapshotError);
+        return;
+      }
+
+      // If there's no previous analysis, we can't compare
+      if (!previousAnalysis) {
+        console.log("No previous analysis to compare against");
+        return;
+      }
+
+      // Check for new links
+      const previousLinks = previousAnalysis.metrics.links || [];
+      const newLinks = currentMetrics.links.filter(
+        (link: string) => !previousLinks.includes(link)
+      );
+
+      // If new links found, send notification
+      if (newLinks.length > 0) {
+        await this.sendEmail(
+          rule.notifyEmail,
+          `${newLinks.length} New Link${
+            newLinks.length === 1 ? "" : "s"
+          } Found`,
+          `New links found on ${website.url}:\n\n${newLinks
+            .map((link: string) => `- ${link}`)
+            .join("\n")}`
+        );
+
+        await supabase
+          .from("monitoring_rules")
+          .update({ last_triggered: new Date().toISOString() })
+          .eq("id", rule.id);
+      }
+    } catch (error) {
+      console.error("Error in checkContentChangeRule:", error);
+      throw error;
+    }
+  }
+
   async checkAllRules() {
     const { data: rules } = await supabase
       .from("monitoring_rules")
       .select("*")
-      .eq("enabled", true);
+      .eq("enabled", true)
+      .eq("type", "CONTENT_CHANGE");
 
     if (!rules) return;
 
     for (const rule of rules) {
-      switch (rule.type) {
-        case "ARTICLE_COUNT":
-          await this.checkArticleCountRule(rule);
-          break;
-        case "KEYWORD":
-          await this.checkKeywordRule(rule);
-          break;
-        // Add more rule types as needed
-      }
+      await this.checkContentChangeRule(rule);
     }
   }
 }

@@ -1,105 +1,100 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
+import * as React from "react";
+import * as TabsPrimitive from "@radix-ui/react-tabs";
 import { cn } from "@/lib/utils";
 
-type Tab = {
-  title: string;
-  value: string;
-  content?: string | React.ReactNode | any;
-};
-
-interface TabsProps {
-  tabs: Tab[];
-  containerClassName?: string;
-  activeTabClassName?: string;
-  tabClassName?: string;
-  contentClassName?: string;
-  onValueChange?: (value: string) => void;
-}
-
-export const Tabs = ({
-  tabs: propTabs,
-  containerClassName,
-  activeTabClassName,
-  tabClassName,
-  contentClassName,
-  onValueChange,
-}: TabsProps) => {
-  const [active, setActive] = useState<Tab>(propTabs[0]);
-  const [tabs, setTabs] = useState<Tab[]>(propTabs);
-
-  // Update tabs when propTabs change
-  useEffect(() => {
-    setTabs(propTabs);
-    // Find and set the currently active tab in the new props
-    const currentActiveTab =
-      propTabs.find((tab) => tab.value === active.value) || propTabs[0];
-    setActive(currentActiveTab);
-  }, [propTabs]);
-
-  const moveSelectedTabToTop = (idx: number) => {
-    const selectedTab = propTabs[idx];
-    setActive(selectedTab);
-    onValueChange?.(selectedTab.value);
-  };
+const Tabs = React.forwardRef<
+  React.ElementRef<typeof TabsPrimitive.Root>,
+  React.ComponentPropsWithoutRef<typeof TabsPrimitive.Root> & {
+    containerClassName?: string;
+    tabs?: Array<{
+      title: string;
+      value: string;
+      content: React.ReactNode;
+    }>;
+  }
+>(({ className, containerClassName, tabs, children, ...props }, ref) => {
+  if (tabs) {
+    return (
+      <div className={containerClassName}>
+        <TabsPrimitive.Root
+          ref={ref}
+          className={cn("w-full", className)}
+          {...props}
+        >
+          <TabsList>
+            {tabs.map((tab) => (
+              <TabsTrigger key={tab.value} value={tab.value}>
+                {tab.title}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {tabs.map((tab) => (
+            <TabsContent key={tab.value} value={tab.value}>
+              {tab.content}
+            </TabsContent>
+          ))}
+        </TabsPrimitive.Root>
+      </div>
+    );
+  }
 
   return (
-    <>
-      <div
-        className={cn(
-          "flex flex-row items-center justify-start [perspective:1000px] relative overflow-auto sm:overflow-visible no-visible-scrollbar max-w-full w-full",
-          containerClassName
-        )}
-      >
-        {propTabs.map((tab, idx) => (
-          <button
-            key={tab.value}
-            onClick={() => moveSelectedTabToTop(idx)}
-            className={cn("relative px-4 py-2 rounded-full", tabClassName)}
-            style={{
-              transformStyle: "preserve-3d",
-            }}
-          >
-            {active.value === tab.value && (
-              <motion.div
-                layoutId="clickedbutton"
-                transition={{ type: "spring", bounce: 0.3, duration: 0.6 }}
-                className={cn(
-                  "absolute inset-0 bg-gray-200 dark:bg-zinc-800 rounded-full ",
-                  activeTabClassName
-                )}
-              />
-            )}
-
-            <span className="relative block text-black dark:text-white">
-              {tab.title}
-            </span>
-          </button>
-        ))}
-      </div>
-      <div className="relative w-full min-h-[500px] mt-6">
-        {propTabs.map((tab) => (
-          <motion.div
-            key={tab.value}
-            initial={{ opacity: 0, x: 20 }}
-            animate={{
-              opacity: tab.value === active.value ? 1 : 0,
-              x: tab.value === active.value ? 0 : 20,
-              pointerEvents: tab.value === active.value ? "auto" : "none",
-            }}
-            transition={{ duration: 0.2, ease: "easeInOut" }}
-            className={cn(
-              "absolute top-0 left-0 w-full",
-              tab.value === active.value ? "relative" : "absolute",
-              contentClassName
-            )}
-          >
-            {tab.content}
-          </motion.div>
-        ))}
-      </div>
-    </>
+    <TabsPrimitive.Root
+      ref={ref}
+      className={cn("w-full", className)}
+      {...props}
+    >
+      {children}
+    </TabsPrimitive.Root>
   );
-};
+});
+Tabs.displayName = TabsPrimitive.Root.displayName;
+
+const TabsList = React.forwardRef<
+  React.ElementRef<typeof TabsPrimitive.List>,
+  React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>
+>(({ className, ...props }, ref) => (
+  <TabsPrimitive.List
+    ref={ref}
+    className={cn(
+      "inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground",
+      className
+    )}
+    {...props}
+  />
+));
+TabsList.displayName = TabsPrimitive.List.displayName;
+
+const TabsTrigger = React.forwardRef<
+  React.ElementRef<typeof TabsPrimitive.Trigger>,
+  React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>
+>(({ className, ...props }, ref) => (
+  <TabsPrimitive.Trigger
+    ref={ref}
+    className={cn(
+      "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+      className
+    )}
+    {...props}
+  />
+));
+TabsTrigger.displayName = TabsPrimitive.Trigger.displayName;
+
+const TabsContent = React.forwardRef<
+  React.ElementRef<typeof TabsPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof TabsPrimitive.Content>
+>(({ className, ...props }, ref) => (
+  <TabsPrimitive.Content
+    ref={ref}
+    className={cn(
+      "mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+      className
+    )}
+    {...props}
+  />
+));
+TabsContent.displayName = TabsPrimitive.Content.displayName;
+
+export { Tabs, TabsList, TabsTrigger, TabsContent };

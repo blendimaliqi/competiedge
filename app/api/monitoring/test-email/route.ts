@@ -13,7 +13,7 @@ export async function POST(request: Request) {
       type: "ARTICLE_COUNT",
       threshold: 0,
       enabled: true,
-      notifyEmail: "blendi.maliqi93@gmail.com",
+      notifyEmail: email,
     });
 
     console.log("Test email sent successfully");
