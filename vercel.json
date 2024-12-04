@@ -4,5 +4,26 @@
       "path": "/api/cron/check-monitoring?secret=$CRON_SECRET",
       "schedule": "*/15 * * * *"
     }
-  ]
+  ],
+  "buildCommand": "npm run build",
+  "installCommand": "npm install --legacy-peer-deps",
+  "functions": {
+    "app/api/scrape/dynamic/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    },
+    "app/api/monitoring/rules/route.ts": {
+      "memory": 512,
+      "maxDuration": 10
+    },
+    "app/api/cron/check-monitoring/route.ts": {
+      "memory": 1024,
+      "maxDuration": 300
+    }
+  },
+  "git": {
+    "deploymentEnabled": {
+      "main": true
+    }
+  }
 }
