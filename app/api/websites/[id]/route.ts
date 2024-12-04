@@ -174,7 +174,7 @@ export async function DELETE(
   } catch (error) {
     console.error("Delete website error:", error);
     return NextResponse.json(
-      { error: "Failed to delete website" },
+      { error: "Failed to delete websitee" },
       { status: 500 }
     );
   }
