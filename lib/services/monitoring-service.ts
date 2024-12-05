@@ -249,8 +249,95 @@ export class MonitoringService {
     }
   }
 
+  async getMonitoringStatus() {
+    try {
+      // First try to get the status
+      const { data, error } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "monitoring_status")
+        .single();
+
+      if (error) {
+        console.error("Error getting monitoring status:", error);
+        // Try to initialize if there's an error
+        await this.initializeMonitoringStatus();
+
+        // Try to get the status again
+        const { data: retryData, error: retryError } = await supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "monitoring_status")
+          .single();
+
+        if (retryError) {
+          console.error(
+            "Error getting monitoring status after initialization:",
+            retryError
+          );
+          return { enabled: true }; // Default state
+        }
+
+        return retryData.value;
+      }
+
+      return data.value;
+    } catch (error) {
+      console.error("Failed to get monitoring status:", error);
+      // Return a default state instead of throwing
+      return { enabled: true };
+    }
+  }
+
+  private async initializeMonitoringStatus() {
+    try {
+      // First, try to call the stored procedure to create the table if it doesn't exist
+      const { error: procError } = await supabase.rpc(
+        "create_system_settings_if_not_exists"
+      );
+
+      if (procError) {
+        console.error(
+          "Error calling create_system_settings_if_not_exists:",
+          procError
+        );
+        throw procError;
+      }
+
+      // Check if we already have a monitoring status
+      const { data: existingStatus } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "monitoring_status")
+        .single();
+
+      if (!existingStatus) {
+        // Insert initial status if it doesn't exist
+        const { error: insertError } = await supabase
+          .from("system_settings")
+          .insert({
+            key: "monitoring_status",
+            value: { enabled: true, paused_at: null, paused_by: null },
+          });
+
+        if (insertError) {
+          console.error("Error initializing monitoring status:", insertError);
+          throw insertError;
+        }
+      }
+
+      console.log("Successfully initialized monitoring status");
+    } catch (error) {
+      console.error("Failed to initialize monitoring status:", error);
+      throw error;
+    }
+  }
+
   async pauseMonitoring(userId: string) {
     try {
+      // Ensure the status exists first
+      await this.getMonitoringStatus();
+
       const { data, error } = await supabase
         .from("system_settings")
         .update({
@@ -279,6 +366,9 @@ export class MonitoringService {
 
   async resumeMonitoring(userId: string) {
     try {
+      // Ensure the status exists first
+      await this.getMonitoringStatus();
+
       const { data, error } = await supabase
         .from("system_settings")
         .update({
@@ -301,26 +391,6 @@ export class MonitoringService {
       return data;
     } catch (error) {
       console.error("Failed to resume monitoring:", error);
-      throw error;
-    }
-  }
-
-  async getMonitoringStatus() {
-    try {
-      const { data, error } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "monitoring_status")
-        .single();
-
-      if (error) {
-        console.error("Error getting monitoring status:", error);
-        throw error;
-      }
-
-      return data.value;
-    } catch (error) {
-      console.error("Failed to get monitoring status:", error);
       throw error;
     }
   }

@@ -11,10 +11,8 @@ export async function GET(request: Request) {
     return NextResponse.json(status);
   } catch (error) {
     console.error("Failed to get monitoring status:", error);
-    return NextResponse.json(
-      { error: "Failed to get monitoring status" },
-      { status: 500 }
-    );
+    // Return a default state instead of an error
+    return NextResponse.json({ enabled: true });
   }
 }
 
@@ -50,22 +48,35 @@ export async function POST(request: Request) {
 
     const { action } = await request.json();
 
-    if (action === "pause") {
-      const result = await monitoringService.pauseMonitoring(session.user.id);
-      return NextResponse.json({ success: true, data: result });
-    } else if (action === "resume") {
-      const result = await monitoringService.resumeMonitoring(session.user.id);
-      return NextResponse.json({ success: true, data: result });
-    } else {
+    if (!["pause", "resume"].includes(action)) {
       return NextResponse.json(
         { error: "Invalid action. Use 'pause' or 'resume'" },
         { status: 400 }
       );
     }
+
+    try {
+      const result =
+        action === "pause"
+          ? await monitoringService.pauseMonitoring(session.user.id)
+          : await monitoringService.resumeMonitoring(session.user.id);
+
+      return NextResponse.json({ success: true, data: result });
+    } catch (error) {
+      console.error(`Failed to ${action} monitoring:`, error);
+      // Try to initialize the table and retry the operation
+      await monitoringService.getMonitoringStatus(); // This will initialize if needed
+      const result =
+        action === "pause"
+          ? await monitoringService.pauseMonitoring(session.user.id)
+          : await monitoringService.resumeMonitoring(session.user.id);
+
+      return NextResponse.json({ success: true, data: result });
+    }
   } catch (error) {
     console.error("Failed to update monitoring status:", error);
     return NextResponse.json(
-      { error: "Failed to update monitoring status" },
+      { error: "Failed to update monitoring status. Please try again." },
       { status: 500 }
     );
   }
