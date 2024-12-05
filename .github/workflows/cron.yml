@@ -10,6 +10,11 @@ on:
 jobs:
   update-data:
     runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
     steps:
       - uses: actions/checkout@v3
@@ -21,10 +26,10 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
-      - name: Run update script
-        run: node scripts/update-data.js
+      - name: Run monitoring check
+        run: node --experimental-modules scripts/update-data.js
 
       # Add step to commit and push the log file
       - name: Commit and push if there are changes

@@ -1,21 +1,16 @@
-const fs = require("fs");
-const path = require("path");
+// @ts-check
+import { monitoringService } from "../lib/services/monitoring-service.js";
 
 async function main() {
   try {
-    console.log("Starting data update...");
+    console.log("Starting monitoring check...");
 
-    // Write to a log file with timestamp
-    const timestamp = new Date().toISOString();
-    const logMessage = `GitHub Action ran successfully at ${timestamp}\n`;
+    // Use the existing monitoring service to check all rules
+    await monitoringService.checkAllRules();
 
-    // Append to log file
-    fs.appendFileSync(path.join(__dirname, "cron-test.log"), logMessage);
-
-    console.log("Data update completed successfully");
-    console.log(logMessage);
+    console.log("Monitoring check completed successfully");
   } catch (error) {
-    console.error("Error updating data:", error);
+    console.error("Error in monitoring check:", error);
     process.exit(1);
   }
 }
