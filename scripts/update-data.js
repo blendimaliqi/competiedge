@@ -7,13 +7,14 @@ const CONFIG = {
   MAX_RETRIES: 3,
   TIMEOUT_MS: 30000, // 30 seconds
   RETRY_DELAY_MS: 5000, // 5 seconds
+  MAX_REDIRECTS: 5,
 };
 
 async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function makeRequest(url, options, retryCount = 0) {
+async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
   const client = url.startsWith("https") ? https : http;
 
   return new Promise((resolve, reject) => {
@@ -37,6 +38,37 @@ async function makeRequest(url, options, retryCount = 0) {
         });
 
         res.on("end", async () => {
+          // Handle redirects (301, 302, 307, 308)
+          if (
+            [301, 302, 307, 308].includes(res.statusCode) &&
+            res.headers.location
+          ) {
+            if (redirectCount >= CONFIG.MAX_REDIRECTS) {
+              reject(
+                new Error(`Too many redirects (max: ${CONFIG.MAX_REDIRECTS})`)
+              );
+              return;
+            }
+
+            const redirectUrl = new URL(res.headers.location, url).href;
+            console.log(
+              `Following redirect (${res.statusCode}) to: ${redirectUrl}`
+            );
+
+            try {
+              const result = await makeRequest(
+                redirectUrl,
+                options,
+                retryCount,
+                redirectCount + 1
+              );
+              resolve(result);
+            } catch (redirectError) {
+              reject(redirectError);
+            }
+            return;
+          }
+
           if (res.statusCode >= 200 && res.statusCode < 300) {
             console.log("Response:", data);
             resolve(data);
@@ -53,7 +85,12 @@ async function makeRequest(url, options, retryCount = 0) {
               console.log(`Retrying after ${CONFIG.RETRY_DELAY_MS}ms...`);
               await sleep(CONFIG.RETRY_DELAY_MS);
               try {
-                const result = await makeRequest(url, options, retryCount + 1);
+                const result = await makeRequest(
+                  url,
+                  options,
+                  retryCount + 1,
+                  redirectCount
+                );
                 resolve(result);
               } catch (retryError) {
                 reject(retryError);
@@ -74,7 +111,12 @@ async function makeRequest(url, options, retryCount = 0) {
         );
         await sleep(CONFIG.RETRY_DELAY_MS);
         try {
-          const result = await makeRequest(url, options, retryCount + 1);
+          const result = await makeRequest(
+            url,
+            options,
+            retryCount + 1,
+            redirectCount
+          );
           resolve(result);
         } catch (retryError) {
           reject(retryError);
@@ -88,7 +130,7 @@ async function makeRequest(url, options, retryCount = 0) {
       req.destroy();
       if (retryCount < CONFIG.MAX_RETRIES - 1) {
         console.log(`Request timeout, retrying...`);
-        makeRequest(url, options, retryCount + 1)
+        makeRequest(url, options, retryCount + 1, redirectCount)
           .then(resolve)
           .catch(reject);
       } else {
