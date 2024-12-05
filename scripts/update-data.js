@@ -182,6 +182,10 @@ async function main() {
 
     // First, get all websites that need to be checked
     console.log("Fetching websites to check...");
+    console.log(
+      "Making request to:",
+      `${appUrl}/api/websites?secret=${cronSecret}`
+    );
     const websitesResponse = await makeRequest(
       `${appUrl}/api/websites?secret=${cronSecret}`,
       {}
@@ -193,9 +197,14 @@ async function main() {
     // Check each website for updates
     for (const website of websites) {
       console.log(`Checking website: ${website.name} (${website.url})`);
+      console.log(`Website ID: ${website.id}`);
 
       try {
         // Update the website and check for new links
+        console.log(
+          "Making update request to:",
+          `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`
+        );
         const updateResponse = await makeRequest(
           `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`,
           {}
@@ -203,11 +212,17 @@ async function main() {
 
         if (updateResponse.newLinks && updateResponse.newLinks.length > 0) {
           console.log(
-            `Found ${updateResponse.newLinks.length} new links for ${website.name}`
+            `Found ${updateResponse.newLinks.length} new links for ${website.name}:`,
+            updateResponse.newLinks
           );
 
           // Trigger email notification through the monitoring service
-          await makeRequest(
+          console.log("Sending notification for new links...");
+          console.log(
+            "Making request to:",
+            `${appUrl}/api/monitoring/notify?secret=${cronSecret}`
+          );
+          const notifyResponse = await makeRequest(
             `${appUrl}/api/monitoring/notify?secret=${cronSecret}`,
             {
               method: "POST",
@@ -217,6 +232,7 @@ async function main() {
               }),
             }
           );
+          console.log("Notification response:", notifyResponse);
         } else {
           console.log(`No new links found for ${website.name}`);
         }

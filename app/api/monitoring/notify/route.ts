@@ -46,10 +46,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "No monitoring rules found" });
     }
 
+    // Get the website URL for the email
+    const { data: website } = await supabase
+      .from("websites")
+      .select("url")
+      .eq("id", websiteId)
+      .single();
+
+    if (!website) {
+      return NextResponse.json({ error: "Website not found" }, { status: 404 });
+    }
+
     // Process each rule
     for (const rule of rules) {
       try {
-        await monitoringService.checkContentChangeRule(rule);
+        await monitoringService.sendEmail(
+          rule.notifyEmail,
+          `${newLinks.length} New Link${
+            newLinks.length === 1 ? "" : "s"
+          } Found`,
+          `New links found on ${website.url}:\n\n${newLinks
+            .map((link: string) => `- ${link}`)
+            .join("\n")}`
+        );
+
+        await supabase
+          .from("monitoring_rules")
+          .update({ last_triggered: new Date().toISOString() })
+          .eq("id", rule.id);
       } catch (error) {
         console.error(`Error processing rule ${rule.id}:`, error);
         // Continue with other rules even if one fails
