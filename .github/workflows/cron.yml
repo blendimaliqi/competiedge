@@ -28,13 +28,12 @@ jobs:
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
+      - name: List directory structure
+        run: |
+          echo "Current directory:"
+          pwd
+          echo "\nDirectory structure:"
+          ls -R
+
       - name: Run monitoring check
         run: node scripts/update-data.js
-
-      # Add step to commit and push the log file
-      - name: Commit and push if there are changes
-        run: |
-          git config --global user.name 'GitHub Action'
-          git config --global user.email 'action@github.com'
-          git add scripts/cron-test.log
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update cron test log [skip ci]" && git push)

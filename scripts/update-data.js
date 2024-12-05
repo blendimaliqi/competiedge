@@ -1,8 +1,19 @@
-const { monitoringService } = require("../lib/services/monitoring-service");
+const path = require("path");
+const { monitoringService } = require(path.join(
+  process.cwd(),
+  "lib",
+  "services",
+  "monitoring-service"
+));
 
 async function main() {
   try {
     console.log("Starting monitoring check...");
+    console.log("Current directory:", process.cwd());
+    console.log(
+      "Monitoring service path:",
+      path.join(process.cwd(), "lib", "services", "monitoring-service")
+    );
 
     // Use the existing monitoring service to check all rules
     await monitoringService.checkAllRules();
