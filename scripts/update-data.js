@@ -1,5 +1,4 @@
-// @ts-check
-import { monitoringService } from "../lib/services/monitoring-service.js";
+const { monitoringService } = require("../lib/services/monitoring-service");
 
 async function main() {
   try {

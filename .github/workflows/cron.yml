@@ -29,7 +29,7 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Run monitoring check
-        run: node --experimental-modules scripts/update-data.js
+        run: node scripts/update-data.js
 
       # Add step to commit and push the log file
       - name: Commit and push if there are changes
