@@ -7,7 +7,7 @@ const CRON_SECRET = process.env.CRON_SECRET;
 
 export async function GET(
   request: Request,
-  { params }: { params: { id: string } }
+  context: { params: { id: string } }
 ) {
   try {
     // Verify cron secret
@@ -28,7 +28,7 @@ export async function GET(
     }
 
     // Get the website ID from the URL
-    const websiteId = params.id;
+    const websiteId = context.params.id;
 
     // Update the website and get new links
     const updatedWebsite = await updateWebsite(websiteId);

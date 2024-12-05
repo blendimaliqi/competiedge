@@ -38,8 +38,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: rulesError.message }, { status: 500 });
     }
 
-    // Get unique website IDs from rules
-    const websiteIds = [...new Set(rules.map((rule) => rule.website_id))];
+    // Get unique website IDs from rules using Array.from instead of spread
+    const websiteIds = Array.from(
+      new Set(rules.map((rule) => rule.website_id))
+    );
 
     if (websiteIds.length === 0) {
       console.log("No websites with active monitoring rules found");
