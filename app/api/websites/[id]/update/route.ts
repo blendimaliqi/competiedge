@@ -5,10 +5,7 @@ import { updateWebsite } from "@/lib/services/website-service";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
-export async function GET(
-  request: Request,
-  context: { params: { id: string } }
-) {
+export async function GET(request: Request, context: any) {
   try {
     // Verify cron secret
     const { searchParams } = new URL(request.url);
