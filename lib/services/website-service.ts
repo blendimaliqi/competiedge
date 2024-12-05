@@ -46,6 +46,7 @@ export async function getWebsites(
 
 export async function updateWebsite(id: string): Promise<Website> {
   try {
+    console.log("Starting website update for ID:", id);
     const { data: website, error: websiteError } = await supabase
       .from("websites")
       .select("*, articles(*)")
@@ -57,11 +58,14 @@ export async function updateWebsite(id: string): Promise<Website> {
       throw websiteError;
     }
 
+    console.log("Fetched website data:", website);
+
     // Store existing articles to preserve history
     const existingArticles = (website.articles || []) as ArticleRow[];
     const existingUrls = new Set(
       existingArticles.map((article: ArticleRow) => article.url)
     );
+    console.log("Existing article count:", existingArticles.length);
 
     let newArticles: Article[] = [];
     let usedMethod = "";
@@ -83,6 +87,7 @@ export async function updateWebsite(id: string): Promise<Website> {
         }
 
         const { articles: feedArticles } = await response.json();
+        console.log("RSS feed articles fetched:", feedArticles?.length || 0);
 
         if (feedArticles && feedArticles.length > 0) {
           usedMethod = "RSS";
@@ -119,6 +124,7 @@ export async function updateWebsite(id: string): Promise<Website> {
       }
 
       const { articles: scrapedArticles } = await response.json();
+      console.log("Scraped articles:", scrapedArticles?.length || 0);
       usedMethod = "Scraping";
       newArticles = scrapedArticles.filter(
         (article: Article) => !existingUrls.has(article.url)
@@ -146,8 +152,11 @@ export async function updateWebsite(id: string): Promise<Website> {
       throw updateError;
     }
 
+    console.log("Website updated with new article count");
+
     // Insert only new articles with proper date handling
     if (newArticles.length > 0) {
+      console.log("Inserting new articles:", newArticles.length);
       const articlesData = newArticles.map((article: Article) => ({
         website_id: id,
         title: article.title?.substring(0, 255) || "Untitled",
@@ -167,6 +176,7 @@ export async function updateWebsite(id: string): Promise<Website> {
         console.error("Articles insert error:", articlesError);
         throw articlesError;
       }
+      console.log("New articles inserted successfully");
     }
 
     // Get fresh articles data after update
@@ -180,6 +190,8 @@ export async function updateWebsite(id: string): Promise<Website> {
       console.error("Error fetching fresh articles:", freshArticlesError);
       throw freshArticlesError;
     }
+
+    console.log("Fetched fresh articles:", freshArticles.length);
 
     // Map the database articles to the Article type
     const mappedArticles = freshArticles.map(

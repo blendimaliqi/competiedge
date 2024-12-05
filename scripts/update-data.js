@@ -226,6 +226,9 @@ async function main() {
             `${appUrl}/api/monitoring/notify?secret=${cronSecret}`,
             {
               method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
               body: JSON.stringify({
                 websiteId: website.id,
                 newLinks: updateResponse.newLinks,
