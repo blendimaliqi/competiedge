@@ -19,6 +19,7 @@ async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
 
   return new Promise((resolve, reject) => {
     console.log(`Attempt ${retryCount + 1} of ${CONFIG.MAX_RETRIES}`);
+    console.log(`Making request to: ${url}`);
 
     const req = client.get(
       url,
@@ -31,6 +32,9 @@ async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
         },
       },
       (res) => {
+        console.log(`Response status: ${res.statusCode}`);
+        console.log("Response headers:", res.headers);
+
         let data = "";
 
         res.on("data", (chunk) => {
@@ -38,7 +42,7 @@ async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
         });
 
         res.on("end", async () => {
-          // Handle redirects (301, 302, 307, 308)
+          // Handle redirects
           if (
             [301, 302, 307, 308].includes(res.statusCode) &&
             res.headers.location
@@ -70,14 +74,22 @@ async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
           }
 
           if (res.statusCode >= 200 && res.statusCode < 300) {
-            console.log("Response:", data);
-            resolve(data);
+            try {
+              const jsonData = JSON.parse(data);
+              console.log("Parsed response:", jsonData);
+              resolve(jsonData);
+            } catch (e) {
+              console.log("Raw response:", data);
+              resolve(data);
+            }
           } else {
+            console.error(`Request failed with status ${res.statusCode}`);
+            console.error("Response data:", data);
+
             const error = new Error(
               `Request failed with status ${res.statusCode}: ${data}`
             );
 
-            // Retry on 5xx errors or specific 4xx errors
             if (
               retryCount < CONFIG.MAX_RETRIES - 1 &&
               (res.statusCode >= 500 || res.statusCode === 429)
@@ -104,6 +116,7 @@ async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
     );
 
     req.on("error", async (error) => {
+      console.error("Network error:", error);
       if (retryCount < CONFIG.MAX_RETRIES - 1) {
         console.log(
           `Network error, retrying after ${CONFIG.RETRY_DELAY_MS}ms...`,
@@ -127,6 +140,7 @@ async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
     });
 
     req.on("timeout", () => {
+      console.error("Request timeout");
       req.destroy();
       if (retryCount < CONFIG.MAX_RETRIES - 1) {
         console.log(`Request timeout, retrying...`);
@@ -147,6 +161,15 @@ async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
 async function main() {
   try {
     console.log("Starting monitoring check...");
+    console.log("Environment check:");
+    console.log("- APP_URL set:", !!process.env.NEXT_PUBLIC_APP_URL);
+    console.log("- CRON_SECRET set:", !!process.env.CRON_SECRET);
+    console.log("- RESEND_API_KEY set:", !!process.env.RESEND_API_KEY);
+    console.log("- SUPABASE_URL set:", !!process.env.NEXT_PUBLIC_SUPABASE_URL);
+    console.log(
+      "- SUPABASE_ANON_KEY set:",
+      !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    );
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL;
     const cronSecret = process.env.CRON_SECRET;
@@ -157,19 +180,52 @@ async function main() {
       );
     }
 
-    // Validate URL
-    try {
-      new URL(appUrl);
-    } catch (error) {
-      throw new Error(`Invalid APP_URL: ${appUrl}`);
+    // First, get all websites that need to be checked
+    console.log("Fetching websites to check...");
+    const websitesResponse = await makeRequest(
+      `${appUrl}/api/websites?secret=${cronSecret}`,
+      {}
+    );
+
+    const websites = websitesResponse.data || [];
+    console.log(`Found ${websites.length} websites to check`);
+
+    // Check each website for updates
+    for (const website of websites) {
+      console.log(`Checking website: ${website.name} (${website.url})`);
+
+      try {
+        // Update the website and check for new links
+        const updateResponse = await makeRequest(
+          `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`,
+          {}
+        );
+
+        if (updateResponse.newLinks && updateResponse.newLinks.length > 0) {
+          console.log(
+            `Found ${updateResponse.newLinks.length} new links for ${website.name}`
+          );
+
+          // Trigger email notification through the monitoring service
+          await makeRequest(
+            `${appUrl}/api/monitoring/notify?secret=${cronSecret}`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                websiteId: website.id,
+                newLinks: updateResponse.newLinks,
+              }),
+            }
+          );
+        } else {
+          console.log(`No new links found for ${website.name}`);
+        }
+      } catch (error) {
+        console.error(`Error checking website ${website.name}:`, error);
+        // Continue with other websites even if one fails
+        continue;
+      }
     }
-
-    console.log("Making request to monitoring endpoint...");
-
-    // Construct the URL with the secret
-    const url = `${appUrl}/api/cron/check-monitoring?secret=${cronSecret}`;
-
-    await makeRequest(url, {});
 
     console.log("Monitoring check completed successfully");
   } catch (error) {

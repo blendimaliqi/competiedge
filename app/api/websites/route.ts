@@ -1,104 +1,74 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
-import { Website, ApiResponse } from "@/lib/types";
-import { CreateWebsiteRequestBody } from "@/lib/types/api";
-import { Database } from "@/lib/database.types";
+import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+import { cookies } from "next/headers";
 
-type WebsiteRow = Database["public"]["Tables"]["websites"]["Row"];
-type ArticleRow = Database["public"]["Tables"]["articles"]["Row"];
+const CRON_SECRET = process.env.CRON_SECRET;
 
-export async function GET(): Promise<NextResponse<ApiResponse<Website[]>>> {
+export async function GET(request: Request) {
   try {
-    const { data: websites, error } = await supabase.from("websites").select(`
-        *,
-        articles (*)
-      `);
+    // Verify cron secret
+    const { searchParams } = new URL(request.url);
+    const secret = searchParams.get("secret");
 
-    if (error) {
-      console.error("Supabase error:", error);
+    if (!CRON_SECRET) {
+      console.error("CRON_SECRET is not set in environment variables");
       return NextResponse.json(
-        { error: "Database error: " + error.message },
+        { error: "Server configuration error" },
         { status: 500 }
       );
     }
 
-    const mappedWebsites = websites?.map(
-      (website: WebsiteRow & { articles?: ArticleRow[] }) => ({
-        id: website.id,
-        name: website.name,
-        url: website.url,
-        articleCount: website.article_count,
-        lastChecked: website.last_checked,
-        createdAt: website.created_at,
-        customContentPatterns: website.custom_content_patterns || [],
-        customSkipPatterns: website.custom_skip_patterns || [],
-        articles: website.articles?.map((article: ArticleRow) => ({
-          id: article.id,
-          title: article.title,
-          url: article.url,
-          path: article.path,
-          summary: article.summary || undefined,
-          date: article.published_date || undefined,
-          firstSeen: article.first_seen,
-        })),
-      })
-    ) as Website[];
+    if (secret !== CRON_SECRET) {
+      console.error("Secret mismatch");
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-    return NextResponse.json(mappedWebsites || []);
-  } catch (error) {
-    console.error("Failed to get websites:", error);
-    return NextResponse.json(
-      { error: "Failed to get websites" },
-      { status: 500 }
-    );
-  }
-}
+    // Initialize Supabase client
+    const supabase = createRouteHandlerClient({ cookies });
 
-export async function POST(
-  request: Request
-): Promise<NextResponse<ApiResponse<Website>>> {
-  try {
-    const body: CreateWebsiteRequestBody = await request.json();
+    // First get all active monitoring rules
+    const { data: rules, error: rulesError } = await supabase
+      .from("monitoring_rules")
+      .select("website_id")
+      .eq("enabled", true)
+      .eq("type", "CONTENT_CHANGE");
 
-    const { data: website, error } = await supabase
+    if (rulesError) {
+      console.error("Error fetching monitoring rules:", rulesError);
+      return NextResponse.json({ error: rulesError.message }, { status: 500 });
+    }
+
+    // Get unique website IDs from rules
+    const websiteIds = [...new Set(rules.map((rule) => rule.website_id))];
+
+    if (websiteIds.length === 0) {
+      console.log("No websites with active monitoring rules found");
+      return NextResponse.json({ data: [] });
+    }
+
+    // Get only the websites that have active monitoring rules
+    const { data: websites, error: websitesError } = await supabase
       .from("websites")
-      .insert({
-        name: body.name,
-        url: body.url,
-        article_count: 0,
-        last_checked: null,
-        created_at: new Date().toISOString(),
-        custom_content_patterns: body.customContentPatterns || [],
-        custom_skip_patterns: body.customSkipPatterns || [],
-      })
-      .select()
-      .single();
+      .select("*")
+      .in("id", websiteIds)
+      .order("created_at", { ascending: true });
 
-    if (error) {
-      console.error("Supabase error:", error);
+    if (websitesError) {
+      console.error("Error fetching websites:", websitesError);
       return NextResponse.json(
-        { error: "Failed to add website: " + error.message },
+        { error: websitesError.message },
         { status: 500 }
       );
     }
 
-    const mappedWebsite: Website = {
-      id: website.id,
-      name: website.name,
-      url: website.url,
-      articleCount: 0,
-      lastChecked: null,
-      createdAt: website.created_at,
-      customContentPatterns: website.custom_content_patterns || [],
-      customSkipPatterns: website.custom_skip_patterns || [],
-      articles: [],
-    };
-
-    return NextResponse.json(mappedWebsite);
+    console.log(
+      `Found ${websites.length} websites with active monitoring rules`
+    );
+    return NextResponse.json({ data: websites });
   } catch (error) {
-    console.error("Failed to add website:", error);
+    console.error("Error in GET /api/websites:", error);
     return NextResponse.json(
-      { error: "Failed to add website" },
+      { error: "Internal server error" },
       { status: 500 }
     );
   }
