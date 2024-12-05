@@ -78,19 +78,42 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to create rule");
+        throw new Error("Failed to create monitoring rule");
       }
 
       return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["monitoringRules"] });
-      setError("Rule created successfully!");
       resetForm();
     },
     onError: (err) => {
       setError(err instanceof Error ? err.message : "Failed to create rule");
+    },
+  });
+
+  const stopMonitoring = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/monitoring/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ websiteId }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to stop monitoring");
+      }
+
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["monitoringRules"] });
+      setError("Monitoring stopped successfully");
+    },
+    onError: (err) => {
+      setError(
+        err instanceof Error ? err.message : "Failed to stop monitoring"
+      );
     },
   });
 
@@ -103,21 +126,13 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-
-    // Validate email
-    if (!newRule.notifyEmail) {
-      setError("Please enter an email address");
-      return;
-    }
-
-    const ruleData = {
-      ...newRule,
+    createRule.mutate({
       websiteId,
+      type: newRule.type,
+      notifyEmail: newRule.notifyEmail,
       enabled: true,
-    };
-
-    createRule.mutate(ruleData as MonitoringRule);
+      threshold: newRule.type === "CONTENT_CHANGE" ? 0 : 1,
+    });
   };
 
   // If not authenticated, show sign-in prompt
@@ -131,15 +146,26 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h3 className="text-lg font-semibold">Page Monitoring</h3>
-        <Button
-          variant="outline"
-          onClick={() => testEmail.mutate()}
-          disabled={testEmail.isPending || !newRule.notifyEmail}
-        >
-          {testEmail.isPending ? "Sending..." : "Test Email"}
-        </Button>
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold">Monitoring Settings</h3>
+        <div className="space-x-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => testEmail.mutate()}
+            disabled={testEmail.isPending || !newRule.notifyEmail}
+          >
+            {testEmail.isPending ? "Sending..." : "Test Email"}
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => stopMonitoring.mutate()}
+            disabled={stopMonitoring.isPending}
+          >
+            {stopMonitoring.isPending ? "Stopping..." : "Stop Monitoring"}
+          </Button>
+        </div>
       </div>
 
       {error && (

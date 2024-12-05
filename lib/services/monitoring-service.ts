@@ -16,7 +16,7 @@ export class MonitoringService {
   private async sendEmail(to: string, subject: string, content: string) {
     if (!process.env.RESEND_API_KEY) {
       console.error("No Resend API key found!");
-      return;
+      throw new Error("Email service not configured - missing API key");
     }
 
     try {
@@ -28,10 +28,16 @@ export class MonitoringService {
         html: `
           <div style="font-family: sans-serif; padding: 20px;">
             <h2>${subject}</h2>
-            <p>${content}</p>
+            <div style="margin: 20px 0;">
+              ${content
+                .split("\n")
+                .map((line) => `<p>${line}</p>`)
+                .join("")}
+            </div>
             <hr>
             <p style="color: #666; font-size: 12px;">
-              This is an automated alert from CompetieEdge
+              This is an automated alert from CompetieEdge. 
+              If you wish to stop receiving these notifications, use the stop monitoring button in the dashboard.
             </p>
           </div>
         `,
@@ -40,17 +46,30 @@ export class MonitoringService {
       return data;
     } catch (error) {
       console.error("Failed to send email:", error);
-      throw error; // Re-throw to handle in the calling function
+      throw error;
     }
   }
 
   async sendNotification(to: string, websiteUrl: string, newLinks: string[]) {
+    console.log("Sending notification for new links:", {
+      to,
+      websiteUrl,
+      newLinksCount: newLinks.length,
+    });
+
+    const formattedLinks = newLinks
+      .map((link) => `• <a href="${link}">${link}</a>`)
+      .join("<br>");
+
     return this.sendEmail(
       to,
-      `${newLinks.length} New Link${newLinks.length === 1 ? "" : "s"} Found`,
-      `New links found on ${websiteUrl}:\n\n${newLinks
-        .map((link: string) => `- ${link}`)
-        .join("\n")}`
+      `${newLinks.length} New Link${
+        newLinks.length === 1 ? "" : "s"
+      } Found on ${websiteUrl}`,
+      `
+        New links have been detected on ${websiteUrl}:<br><br>
+        ${formattedLinks}
+      `
     );
   }
 
@@ -215,6 +234,26 @@ export class MonitoringService {
 
     for (const rule of rules) {
       await this.checkContentChangeRule(rule);
+    }
+  }
+
+  async stopMonitoring(websiteId: string, userId: string) {
+    try {
+      const { data, error } = await supabase
+        .from("monitoring_rules")
+        .update({ enabled: false })
+        .eq("website_id", websiteId)
+        .eq("user_id", userId);
+
+      if (error) {
+        console.error("Error stopping monitoring:", error);
+        throw error;
+      }
+
+      return data;
+    } catch (error) {
+      console.error("Failed to stop monitoring:", error);
+      throw error;
     }
   }
 }
