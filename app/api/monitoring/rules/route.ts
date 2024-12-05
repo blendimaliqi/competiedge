@@ -6,18 +6,31 @@ import { Database } from "@/lib/database.types";
 
 export async function POST(request: Request) {
   try {
-    // Initialize Supabase client with cookie store
-    const supabase = createRouteHandlerClient<Database>({ cookies });
+    const cookieStore = cookies();
+    const supabase = createRouteHandlerClient<Database>({
+      cookies: () => cookieStore,
+    });
 
     // Get authenticated user
     const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
 
-    if (userError || !user) {
+    if (sessionError) {
+      console.error("Session error:", sessionError);
+      return NextResponse.json(
+        { error: "Authentication error" },
+        { status: 401 }
+      );
+    }
+
+    if (!session?.user?.id) {
       console.error("No user ID found in session");
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json(
+        { error: "You must be signed in to create monitoring rules" },
+        { status: 401 }
+      );
     }
 
     const json = await request.json();
@@ -55,6 +68,7 @@ export async function POST(request: Request) {
       );
     }
 
+    // Insert the new rule
     const { data, error } = await supabase
       .from("monitoring_rules")
       .insert([
@@ -65,19 +79,20 @@ export async function POST(request: Request) {
           keyword,
           enabled,
           notify_email: notifyEmail,
-          created_by: user.id,
+          created_by: session.user.id,
           created_at: new Date().toISOString(),
           last_triggered: null,
         },
       ])
-      .select();
+      .select()
+      .single();
 
     if (error) {
       console.error("Error creating monitoring rule:", error);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json(data[0]);
+    return NextResponse.json(data);
   } catch (error) {
     console.error("Error in monitoring rules POST:", error);
     return NextResponse.json(

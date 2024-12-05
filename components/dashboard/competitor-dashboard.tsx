@@ -11,6 +11,7 @@ import { Category } from "@/lib/types";
 import { supabase } from "@/lib/supabase";
 import { PlaceholdersAndVanishInput } from "@/components/ui/placeholders-and-vanish-input";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { MonitoringStatus } from "@/components/monitoring/monitoring-status";
 
 export function CompetitorDashboard() {
   const [newUrl, setNewUrl] = useState("");
@@ -152,64 +153,70 @@ export function CompetitorDashboard() {
   };
 
   return (
-    <div className="space-y-12">
-      <div className="h-[20rem] flex flex-col justify-center items-center px-4">
-        <h2 className="mb-10 text-xl text-center sm:text-3xl dark:text-white text-black">
-          Monitor Your Competitors
-        </h2>
-        <div className="w-full max-w-3xl space-y-4">
-          <PlaceholdersAndVanishInput
-            placeholders={placeholders}
-            onChange={(e) => setNewUrl(e.target.value)}
-            onSubmit={handleAddCompetitor}
-            loading={addWebsiteMutation.isPending}
-          />
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-        </div>
-      </div>
-
-      <div className="">
-        <div className="flex justify-between items-center mb-6">
+    <div className="space-y-8">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Competitor Dashboard</h1>
+        <div className="flex items-center gap-4">
+          <MonitoringStatus />
           <CategoryManager
             categories={categories}
             onCategoryCreate={handleCreateCategory}
           />
         </div>
+      </div>
 
-        <Tabs
-          tabs={[
-            {
-              title: "Latest Additions",
-              value: "latest",
-              content: (
-                <CompetitorList
-                  key="latest"
-                  categoryId={null}
-                  categories={categories}
-                />
-              ),
-            },
-            ...categories.map((category) => ({
-              title: category.name,
-              value: category.id,
-              content: (
-                <CompetitorList
-                  key={category.id}
-                  categoryId={category.id}
-                  categories={categories}
-                  onDeleteCategory={handleDeleteCategory}
-                />
-              ),
-            })),
-          ]}
-          containerClassName="mb-6"
-          onValueChange={(value) => setSelectedCategory(value)}
-        />
+      <div className="space-y-12">
+        <div className="h-[20rem] flex flex-col justify-center items-center px-4">
+          <h2 className="mb-10 text-xl text-center sm:text-3xl dark:text-white text-black">
+            Monitor Your Competitors
+          </h2>
+          <div className="w-full max-w-3xl space-y-4">
+            <PlaceholdersAndVanishInput
+              placeholders={placeholders}
+              onChange={(e) => setNewUrl(e.target.value)}
+              onSubmit={handleAddCompetitor}
+              loading={addWebsiteMutation.isPending}
+            />
+            {error && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+          </div>
+        </div>
+
+        <div className="">
+          <Tabs
+            tabs={[
+              {
+                title: "Latest Additions",
+                value: "latest",
+                content: (
+                  <CompetitorList
+                    key="latest"
+                    categoryId={null}
+                    categories={categories}
+                  />
+                ),
+              },
+              ...categories.map((category) => ({
+                title: category.name,
+                value: category.id,
+                content: (
+                  <CompetitorList
+                    key={category.id}
+                    categoryId={category.id}
+                    categories={categories}
+                    onDeleteCategory={handleDeleteCategory}
+                  />
+                ),
+              })),
+            ]}
+            containerClassName="mb-6"
+            onValueChange={(value) => setSelectedCategory(value)}
+          />
+        </div>
       </div>
     </div>
   );

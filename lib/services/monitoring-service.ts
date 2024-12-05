@@ -224,6 +224,18 @@ export class MonitoringService {
   }
 
   async checkAllRules() {
+    // Check if monitoring is enabled
+    const { data: settings } = await supabase
+      .from("system_settings")
+      .select("value")
+      .eq("key", "monitoring_status")
+      .single();
+
+    if (!settings?.value.enabled) {
+      console.log("Monitoring is currently paused");
+      return;
+    }
+
     const { data: rules } = await supabase
       .from("monitoring_rules")
       .select("*")
@@ -234,6 +246,82 @@ export class MonitoringService {
 
     for (const rule of rules) {
       await this.checkContentChangeRule(rule);
+    }
+  }
+
+  async pauseMonitoring(userId: string) {
+    try {
+      const { data, error } = await supabase
+        .from("system_settings")
+        .update({
+          value: {
+            enabled: false,
+            paused_at: new Date().toISOString(),
+            paused_by: userId,
+          },
+          updated_by: userId,
+        })
+        .eq("key", "monitoring_status")
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Error pausing monitoring:", error);
+        throw error;
+      }
+
+      return data;
+    } catch (error) {
+      console.error("Failed to pause monitoring:", error);
+      throw error;
+    }
+  }
+
+  async resumeMonitoring(userId: string) {
+    try {
+      const { data, error } = await supabase
+        .from("system_settings")
+        .update({
+          value: {
+            enabled: true,
+            paused_at: null,
+            paused_by: null,
+          },
+          updated_by: userId,
+        })
+        .eq("key", "monitoring_status")
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Error resuming monitoring:", error);
+        throw error;
+      }
+
+      return data;
+    } catch (error) {
+      console.error("Failed to resume monitoring:", error);
+      throw error;
+    }
+  }
+
+  async getMonitoringStatus() {
+    try {
+      const { data, error } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "monitoring_status")
+        .single();
+
+      if (error) {
+        console.error("Error getting monitoring status:", error);
+        throw error;
+      }
+
+      return data.value;
+    } catch (error) {
+      console.error("Failed to get monitoring status:", error);
+      throw error;
     }
   }
 

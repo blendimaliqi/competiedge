@@ -67,18 +67,26 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
 
   const createRule = useMutation({
     mutationFn: async (rule: Omit<MonitoringRule, "id">) => {
+      if (!user) {
+        throw new Error("You must be signed in to create monitoring rules");
+      }
+
       if (!rule.notifyEmail) {
         throw new Error("Please enter an email address");
       }
 
       const response = await fetch("/api/monitoring/rules", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          credentials: "include",
+        },
         body: JSON.stringify(rule),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to create monitoring rule");
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to create monitoring rule");
       }
 
       return response.json();
@@ -86,6 +94,7 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["monitoringRules"] });
       resetForm();
+      setError("Monitoring rule created successfully!");
     },
     onError: (err) => {
       setError(err instanceof Error ? err.message : "Failed to create rule");
@@ -94,14 +103,22 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
 
   const stopMonitoring = useMutation({
     mutationFn: async () => {
+      if (!user) {
+        throw new Error("You must be signed in to stop monitoring");
+      }
+
       const response = await fetch("/api/monitoring/stop", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          credentials: "include",
+        },
         body: JSON.stringify({ websiteId }),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to stop monitoring");
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to stop monitoring");
       }
 
       return response.json();
