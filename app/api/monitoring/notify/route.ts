@@ -60,14 +60,10 @@ export async function POST(request: Request) {
     // Process each rule
     for (const rule of rules) {
       try {
-        await monitoringService.sendEmail(
+        await monitoringService.sendNotification(
           rule.notifyEmail,
-          `${newLinks.length} New Link${
-            newLinks.length === 1 ? "" : "s"
-          } Found`,
-          `New links found on ${website.url}:\n\n${newLinks
-            .map((link: string) => `- ${link}`)
-            .join("\n")}`
+          website.url,
+          newLinks
         );
 
         await supabase

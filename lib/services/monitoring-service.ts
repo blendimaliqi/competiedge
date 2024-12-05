@@ -44,6 +44,16 @@ export class MonitoringService {
     }
   }
 
+  async sendNotification(to: string, websiteUrl: string, newLinks: string[]) {
+    return this.sendEmail(
+      to,
+      `${newLinks.length} New Link${newLinks.length === 1 ? "" : "s"} Found`,
+      `New links found on ${websiteUrl}:\n\n${newLinks
+        .map((link: string) => `- ${link}`)
+        .join("\n")}`
+    );
+  }
+
   async checkArticleCountRule(rule: MonitoringRule) {
     try {
       console.log("Checking article count rule:", rule);
@@ -181,15 +191,7 @@ export class MonitoringService {
 
       // If new links found, send notification
       if (newLinks.length > 0) {
-        await this.sendEmail(
-          rule.notifyEmail,
-          `${newLinks.length} New Link${
-            newLinks.length === 1 ? "" : "s"
-          } Found`,
-          `New links found on ${website.url}:\n\n${newLinks
-            .map((link: string) => `- ${link}`)
-            .join("\n")}`
-        );
+        await this.sendNotification(rule.notifyEmail, website.url, newLinks);
 
         await supabase
           .from("monitoring_rules")
