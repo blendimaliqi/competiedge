@@ -40,6 +40,16 @@ export async function GET(request: Request, context: any) {
       return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
 
+    // Get existing articles
+    const { data: existingArticles } = await client
+      .from("articles")
+      .select("url")
+      .eq("website_id", websiteId);
+
+    const existingUrls = new Set(
+      existingArticles?.map((article) => article.url) || []
+    );
+
     // Analyze content
     const response = await fetch(
       process.env.NEXT_PUBLIC_APP_URL + "/api/analyze-content",
@@ -65,73 +75,67 @@ export async function GET(request: Request, context: any) {
     }
 
     const { metrics: currentMetrics } = await response.json();
+    const currentLinks = currentMetrics.links || [];
 
-    // Store the new snapshot
-    console.log("Storing new snapshot for website:", websiteId);
-    const { error: insertError } = await client
-      .from("content_snapshots")
-      .insert({
-        website_id: websiteId,
-        metrics: currentMetrics,
-        created_at: new Date().toISOString(),
-      });
-
-    if (insertError) {
-      console.error("Error storing snapshot:", insertError);
-      return NextResponse.json({
-        website: updatedWebsite,
-        message: "Update completed but failed to store snapshot",
-        error: insertError.message,
-      });
-    }
-
-    // Get the latest two snapshots to compare
-    const { data: snapshots, error: snapshotsError } = await client
-      .from("content_snapshots")
-      .select("*")
-      .eq("website_id", websiteId)
-      .order("created_at", { ascending: false })
-      .limit(2);
-
-    if (snapshotsError || !snapshots || snapshots.length < 2) {
-      console.log("Not enough snapshots for comparison");
-      return NextResponse.json({
-        website: updatedWebsite,
-        message: "Update completed but not enough snapshots for comparison",
-      });
-    }
-
-    const [currentSnapshot, previousSnapshot] = snapshots;
-    const previousLinks = previousSnapshot.metrics.links || [];
-    const newLinks = currentMetrics.links.filter(
-      (link: string) => !previousLinks.includes(link)
-    );
-
+    // Find new links by comparing with existing articles
+    const newLinks = currentLinks.filter((link) => !existingUrls.has(link));
     console.log("Found new links:", newLinks.length);
 
-    // If this is a cron job request and we found new links, send notifications
-    if (secret === CRON_SECRET && newLinks.length > 0) {
-      try {
-        const notifyResponse = await fetch(
-          `${process.env.NEXT_PUBLIC_APP_URL}/api/monitoring/notify?secret=${CRON_SECRET}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              websiteId,
-              newLinks,
-            }),
-          }
-        );
+    // Store new articles
+    if (newLinks.length > 0) {
+      const { error: insertError } = await client.from("articles").insert(
+        newLinks.map((url) => ({
+          website_id: websiteId,
+          url,
+          title: url, // You might want to fetch the actual title
+          path: new URL(url).pathname,
+          first_seen: new Date().toISOString(),
+        }))
+      );
 
-        if (!notifyResponse.ok) {
-          console.error(
-            "Failed to send notifications:",
-            await notifyResponse.text()
+      if (insertError) {
+        console.error("Error storing new articles:", insertError);
+        return NextResponse.json({
+          website: updatedWebsite,
+          message: "Update completed but failed to store new articles",
+          error: insertError.message,
+        });
+      }
+
+      // Update article count
+      const { error: countError } = await client
+        .from("websites")
+        .update({ article_count: existingUrls.size + newLinks.length })
+        .eq("id", websiteId);
+
+      if (countError) {
+        console.error("Error updating article count:", countError);
+      }
+
+      // If this is a cron job request and we found new links, send notifications
+      if (secret === CRON_SECRET) {
+        try {
+          const notifyResponse = await fetch(
+            `${process.env.NEXT_PUBLIC_APP_URL}/api/monitoring/notify?secret=${CRON_SECRET}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                websiteId,
+                newLinks,
+              }),
+            }
           );
+
+          if (!notifyResponse.ok) {
+            console.error(
+              "Failed to send notifications:",
+              await notifyResponse.text()
+            );
+          }
+        } catch (error) {
+          console.error("Error sending notifications:", error);
         }
-      } catch (error) {
-        console.error("Error sending notifications:", error);
       }
     }
 
