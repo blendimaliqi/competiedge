@@ -424,8 +424,7 @@ export class MonitoringService {
       const { data, error } = await supabase
         .from("monitoring_rules")
         .update({ enabled: false })
-        .eq("website_id", websiteId)
-        .eq("user_id", userId);
+        .eq("website_id", websiteId);
 
       if (error) {
         console.error("Error stopping monitoring:", error);
