@@ -423,7 +423,7 @@ export class MonitoringService {
     try {
       const { data, error } = await supabase
         .from("monitoring_rules")
-        .update({ enabled: false })
+        .delete()
         .eq("website_id", websiteId)
         .eq("created_by", userId);
 
