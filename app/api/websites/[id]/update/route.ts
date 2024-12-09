@@ -78,13 +78,15 @@ export async function GET(request: Request, context: any) {
     const currentLinks = currentMetrics.links || [];
 
     // Find new links by comparing with existing articles
-    const newLinks = currentLinks.filter((link) => !existingUrls.has(link));
+    const newLinks = currentLinks.filter(
+      (link: string) => !existingUrls.has(link)
+    );
     console.log("Found new links:", newLinks.length);
 
     // Store new articles
     if (newLinks.length > 0) {
       const { error: insertError } = await client.from("articles").insert(
-        newLinks.map((url) => ({
+        newLinks.map((url: string) => ({
           website_id: websiteId,
           url,
           title: url, // You might want to fetch the actual title
