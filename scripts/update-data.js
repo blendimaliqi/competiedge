@@ -10,7 +10,8 @@ const CONFIG = {
   MAX_REDIRECTS: 5,
 };
 
-async function sleep(ms) {
+// Helper function to wait for a specified time
+function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -175,6 +176,62 @@ async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
   }
 }
 
+async function checkWebsite(website, appUrl, cronSecret) {
+  console.log(`Checking website: ${website.name} (${website.url})`);
+  console.log(`Website ID: ${website.id}`);
+
+  try {
+    // First, initiate the update
+    console.log(
+      "Making update request to:",
+      `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`
+    );
+    const updateResponse = await makeRequest(
+      `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`,
+      {}
+    );
+
+    // Wait for a short time to allow background processing
+    console.log("Waiting for analysis to complete...");
+    await sleep(15000); // Wait 15 seconds
+
+    // Check for analysis results
+    console.log("Checking analysis results...");
+    const analysisResponse = await makeRequest(
+      `${appUrl}/api/websites/${website.id}/analysis?secret=${cronSecret}`,
+      {}
+    );
+
+    if (analysisResponse.newLinks && analysisResponse.newLinks.length > 0) {
+      console.log(
+        `Found ${analysisResponse.newLinks.length} new links for ${website.name}:`,
+        analysisResponse.newLinks
+      );
+
+      // Send notification
+      console.log("Sending notification for new links...");
+      const notifyResponse = await makeRequest(
+        `${appUrl}/api/monitoring/notify?secret=${cronSecret}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            websiteId: website.id,
+            newLinks: analysisResponse.newLinks,
+          }),
+        }
+      );
+      console.log("Notification response:", notifyResponse);
+    } else {
+      console.log(`No new links found for ${website.name}`);
+    }
+  } catch (error) {
+    console.error(`Error checking website ${website.name}:`, error);
+  }
+}
+
 async function main() {
   try {
     console.log("Starting monitoring check...");
@@ -197,12 +254,8 @@ async function main() {
       );
     }
 
-    // First, get all websites that need to be checked
+    // Get all websites that need to be checked
     console.log("Fetching websites to check...");
-    console.log(
-      "Making request to:",
-      `${appUrl}/api/websites?secret=${cronSecret}`
-    );
     const websitesResponse = await makeRequest(
       `${appUrl}/api/websites?secret=${cronSecret}`,
       {}
@@ -213,54 +266,7 @@ async function main() {
 
     // Check each website for updates
     for (const website of websites) {
-      console.log(`Checking website: ${website.name} (${website.url})`);
-      console.log(`Website ID: ${website.id}`);
-
-      try {
-        // Update the website and check for new links
-        console.log(
-          "Making update request to:",
-          `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`
-        );
-        const updateResponse = await makeRequest(
-          `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`,
-          {}
-        );
-
-        if (updateResponse.newLinks && updateResponse.newLinks.length > 0) {
-          console.log(
-            `Found ${updateResponse.newLinks.length} new links for ${website.name}:`,
-            updateResponse.newLinks
-          );
-
-          // Trigger email notification through the monitoring service
-          console.log("Sending notification for new links...");
-          console.log(
-            "Making request to:",
-            `${appUrl}/api/monitoring/notify?secret=${cronSecret}`
-          );
-          const notifyResponse = await makeRequest(
-            `${appUrl}/api/monitoring/notify?secret=${cronSecret}`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                websiteId: website.id,
-                newLinks: updateResponse.newLinks,
-              }),
-            }
-          );
-          console.log("Notification response:", notifyResponse);
-        } else {
-          console.log(`No new links found for ${website.name}`);
-        }
-      } catch (error) {
-        console.error(`Error checking website ${website.name}:`, error);
-        // Continue with other websites even if one fails
-        continue;
-      }
+      await checkWebsite(website, appUrl, cronSecret);
     }
 
     console.log("Monitoring check completed successfully");
