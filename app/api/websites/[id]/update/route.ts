@@ -37,20 +37,6 @@ export async function GET(request: Request, context: any) {
     // Start content analysis in the background
     const analyzePromise = (async () => {
       try {
-        // Get the previous snapshot to compare
-        console.log("Fetching previous snapshot for website:", websiteId);
-        const { data: previousSnapshot, error: snapshotError } = await supabase
-          .from("content_snapshots")
-          .select("*")
-          .eq("website_id", websiteId)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .single();
-
-        if (snapshotError) {
-          console.error("Error fetching previous snapshot:", snapshotError);
-        }
-
         // Get current content analysis
         console.log("Analyzing content for URL:", updatedWebsite.url);
         const response = await fetch(
@@ -76,30 +62,37 @@ export async function GET(request: Request, context: any) {
 
         // Store the new snapshot
         console.log("Storing new snapshot for website:", websiteId);
-        const { data: newSnapshot, error: insertError } = await supabase
+        const { error: insertError } = await supabase
           .from("content_snapshots")
           .insert({
             website_id: websiteId,
             metrics: currentMetrics,
             created_at: new Date().toISOString(),
-          })
-          .select()
-          .single();
+          });
 
         if (insertError) {
           console.error("Error storing snapshot:", insertError);
           return;
         }
 
-        // Find new links by comparing with previous snapshot
-        let newLinks: string[] = [];
-        if (previousSnapshot) {
-          const previousLinks = previousSnapshot.metrics.links || [];
-          newLinks = currentMetrics.links.filter(
-            (link: string) => !previousLinks.includes(link)
-          );
-          console.log("Found new links:", newLinks.length);
+        // Get the latest two snapshots to compare
+        const { data: snapshots, error: snapshotsError } = await supabase
+          .from("content_snapshots")
+          .select("*")
+          .eq("website_id", websiteId)
+          .order("created_at", { ascending: false })
+          .limit(2);
+
+        if (snapshotsError || !snapshots || snapshots.length < 2) {
+          console.log("Not enough snapshots for comparison");
+          return;
         }
+
+        const [currentSnapshot, previousSnapshot] = snapshots;
+        const previousLinks = previousSnapshot.metrics.links || [];
+        const newLinks = currentMetrics.links.filter(
+          (link: string) => !previousLinks.includes(link)
+        );
 
         // If this is a cron job request and we found new links, send notifications
         if (secret === CRON_SECRET && newLinks.length > 0) {

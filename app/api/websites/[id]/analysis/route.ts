@@ -62,7 +62,10 @@ export async function GET(request: Request, context: any) {
       newLinksFound: newLinks.length,
     });
 
-    return NextResponse.json({ newLinks });
+    return NextResponse.json({
+      status: "completed",
+      newLinks,
+    });
   } catch (error) {
     console.error("Error checking analysis:", error);
     return NextResponse.json(

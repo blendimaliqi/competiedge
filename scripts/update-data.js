@@ -202,6 +202,11 @@ async function checkWebsite(website, appUrl, cronSecret) {
       {}
     );
 
+    if (analysisResponse.error) {
+      console.error("Analysis failed:", analysisResponse.error);
+      return;
+    }
+
     if (analysisResponse.newLinks && analysisResponse.newLinks.length > 0) {
       console.log(
         `Found ${analysisResponse.newLinks.length} new links for ${website.name}:`,
