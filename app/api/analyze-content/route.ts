@@ -25,93 +25,184 @@ export async function POST(request: Request) {
     }
 
     console.log("Making request to URL:", url);
-    const response = await axios.get(url, {
-      timeout: 30000, // Increased timeout to 30 seconds
-      maxRedirects: 5,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-      },
-    });
 
-    if (!response.data) {
-      console.error("No content received from URL:", url);
-      return NextResponse.json(
-        { error: "No content received from URL" },
-        { status: 404 }
-      );
+    const maxRetries = 3;
+    const retryDelay = 1000;
+    let lastError;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 1) {
+          console.log(
+            `Retry attempt ${attempt}/${maxRetries} after ${retryDelay}ms`
+          );
+          await new Promise((resolve) => setTimeout(resolve, retryDelay));
+        }
+
+        const response = await axios.get(url, {
+          timeout: 30000, // Increased timeout to 30 seconds
+          maxRedirects: 5,
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            Accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+            "Sec-Ch-Ua":
+              '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+            Referer: new URL(url).origin,
+          },
+          validateStatus: function (status) {
+            return status < 500; // Accept all status codes less than 500
+          },
+        });
+
+        if (!response.data) {
+          throw new Error("No content received from URL");
+        }
+
+        if (response.status === 403 || response.status === 429) {
+          throw new Error(`Request blocked with status ${response.status}`);
+        }
+
+        console.log("Successfully fetched content, parsing with cheerio");
+        const $ = cheerio.load(response.data);
+
+        // Extract key information
+        const wordCount = $("body")
+          .text()
+          .split(/\s+/)
+          .filter((word) => word.length > 0).length;
+        const headings = $("h1, h2, h3")
+          .map((_, el) => $(el).text().trim())
+          .get()
+          .filter((heading) => heading.length > 0);
+
+        // Extract actual links instead of just counting them
+        const links = $("a[href]")
+          .map((_, el) => {
+            const href = $(el).attr("href");
+            if (!href || href === "#" || href.startsWith("javascript:"))
+              return null;
+            try {
+              // Convert relative URLs to absolute
+              const absoluteUrl = new URL(href, url).href;
+              return absoluteUrl;
+            } catch (e) {
+              return null;
+            }
+          })
+          .get()
+          .filter(Boolean);
+
+        const images = $("img").length;
+
+        // Basic sentiment analysis
+        const text = $("body").text().toLowerCase();
+        const positiveWords = [
+          "great",
+          "innovative",
+          "best",
+          "leading",
+          "success",
+          "excellent",
+          "amazing",
+        ];
+        const negativeWords = [
+          "problem",
+          "issue",
+          "bad",
+          "worst",
+          "failure",
+          "poor",
+          "terrible",
+        ];
+
+        const sentiment = {
+          positive: positiveWords.filter((word) => text.includes(word)).length,
+          negative: negativeWords.filter((word) => text.includes(word)).length,
+        };
+
+        return NextResponse.json({
+          metrics: {
+            wordCount,
+            headings,
+            links,
+            images,
+            sentiment,
+          },
+        });
+      } catch (error) {
+        console.error(`Attempt ${attempt} failed:`, error);
+        lastError = error;
+
+        // If this was the last attempt, or if it's not a retryable error, throw
+        if (
+          attempt === maxRetries ||
+          !(
+            axios.isAxiosError(error) &&
+            (error.response?.status === 403 ||
+              error.response?.status === 429 ||
+              error.code === "ECONNABORTED")
+          )
+        ) {
+          break;
+        }
+      }
     }
 
-    console.log("Successfully fetched content, parsing with cheerio");
-    const $ = cheerio.load(response.data);
+    // If we got here, all retries failed
+    console.error("All retry attempts failed");
 
-    // Extract key information
-    const wordCount = $("body")
-      .text()
-      .split(/\s+/)
-      .filter((word) => word.length > 0).length;
-    const headings = $("h1, h2, h3")
-      .map((_, el) => $(el).text().trim())
-      .get()
-      .filter((heading) => heading.length > 0);
+    if (axios.isAxiosError(lastError)) {
+      console.error("Axios error details:", {
+        code: lastError.code,
+        status: lastError.response?.status,
+        statusText: lastError.response?.statusText,
+        headers: lastError.response?.headers,
+      });
 
-    // Extract actual links instead of just counting them
-    const links = $("a[href]")
-      .map((_, el) => {
-        const href = $(el).attr("href");
-        if (!href || href === "#" || href.startsWith("javascript:"))
-          return null;
-        try {
-          // Convert relative URLs to absolute
-          const absoluteUrl = new URL(href, url).href;
-          return absoluteUrl;
-        } catch (e) {
-          return null;
-        }
-      })
-      .get()
-      .filter(Boolean);
+      if (lastError.code === "ECONNABORTED") {
+        return NextResponse.json({ error: "Request timeout" }, { status: 408 });
+      }
+      if (lastError.response?.status === 404) {
+        return NextResponse.json({ error: "Page not found" }, { status: 404 });
+      }
+      if (lastError.response?.status === 403) {
+        return NextResponse.json(
+          {
+            error:
+              "Access forbidden - website might be blocking automated requests",
+          },
+          { status: 403 }
+        );
+      }
+      if (lastError.response?.status === 429) {
+        return NextResponse.json(
+          { error: "Too many requests - rate limited by website" },
+          { status: 429 }
+        );
+      }
+    }
 
-    const images = $("img").length;
-
-    // Basic sentiment analysis
-    const text = $("body").text().toLowerCase();
-    const positiveWords = [
-      "great",
-      "innovative",
-      "best",
-      "leading",
-      "success",
-      "excellent",
-      "amazing",
-    ];
-    const negativeWords = [
-      "problem",
-      "issue",
-      "bad",
-      "worst",
-      "failure",
-      "poor",
-      "terrible",
-    ];
-
-    const sentiment = {
-      positive: positiveWords.filter((word) => text.includes(word)).length,
-      negative: negativeWords.filter((word) => text.includes(word)).length,
-    };
-
-    return NextResponse.json({
-      metrics: {
-        wordCount,
-        headings,
-        links,
-        images,
-        sentiment,
+    return NextResponse.json(
+      {
+        error: "Failed to analyze content",
+        details:
+          lastError instanceof Error ? lastError.message : String(lastError),
       },
-    });
+      { status: 500 }
+    );
   } catch (error) {
     console.error("Content analysis error:", {
       url: request.url,

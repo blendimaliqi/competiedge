@@ -177,11 +177,16 @@ async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
 }
 
 async function checkWebsite(website, appUrl, cronSecret, serviceRoleKey) {
-  console.log(`Checking website: ${website.name} (${website.url})`);
+  console.log(`\nChecking website: ${website.name} (${website.url})`);
   console.log(`Website ID: ${website.id}`);
 
   try {
-    // Make the update request
+    // Add a random delay between 2-5 seconds before checking each website
+    const delay = Math.floor(Math.random() * 3000) + 2000;
+    console.log(`Waiting ${delay}ms before checking...`);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+
+    // Make the update request with extended timeout
     console.log(
       "Making update request to:",
       `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`

@@ -170,6 +170,78 @@ export async function GET(request: Request, context: any) {
         statusText: response.statusText,
         error: errorText,
       });
+
+      // If the request was blocked, try again with a delay
+      if (response.status === 403 || response.status === 429) {
+        console.log("Request was blocked, waiting 5 seconds and retrying...");
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+
+        const retryResponse = await fetch(
+          process.env.NEXT_PUBLIC_APP_URL + "/api/analyze-content",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: website.url }),
+          }
+        );
+
+        if (retryResponse.ok) {
+          const { metrics: currentMetrics } = await retryResponse.json();
+          const currentLinks = (currentMetrics.links || []).filter(
+            isArticleUrl
+          );
+
+          // Find new links by comparing with existing articles
+          const newLinks = currentLinks.filter(
+            (link: any) => !existingUrls.has(link)
+          );
+          console.log("Found new article links:", newLinks.length);
+
+          // Store new articles
+          if (newLinks.length > 0) {
+            const { error: articlesError } = await client
+              .from("articles")
+              .insert(
+                newLinks.map((url: string) => ({
+                  website_id: websiteId,
+                  url,
+                  title: url, // You might want to fetch the actual title
+                  path: new URL(url).pathname,
+                  first_seen: new Date().toISOString(),
+                }))
+              );
+
+            if (articlesError) {
+              console.error("Error storing new articles:", articlesError);
+              return NextResponse.json({
+                website: updatedWebsite,
+                message: "Update completed but failed to store new articles",
+                error: articlesError.message,
+              });
+            }
+
+            // Update article count
+            const { error: countError } = await client
+              .from("websites")
+              .update({
+                article_count:
+                  (existingArticles?.length || 0) + newLinks.length,
+              })
+              .eq("id", websiteId);
+
+            if (countError) {
+              console.error("Error updating article count:", countError);
+            }
+          }
+
+          return NextResponse.json({
+            website: updatedWebsite,
+            message: "Update completed successfully after retry",
+            newLinks: newLinks,
+          });
+        }
+      }
+
       return NextResponse.json({
         website: updatedWebsite,
         message: "Update completed but analysis failed",
