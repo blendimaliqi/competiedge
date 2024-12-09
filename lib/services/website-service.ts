@@ -58,6 +58,10 @@ export async function updateWebsite(id: string): Promise<Website> {
       throw websiteError;
     }
 
+    if (!process.env.NEXT_PUBLIC_APP_URL) {
+      throw new Error("NEXT_PUBLIC_APP_URL is not set");
+    }
+
     console.log("Fetched website data:", website);
 
     // Store existing articles to preserve history
@@ -74,16 +78,24 @@ export async function updateWebsite(id: string): Promise<Website> {
     if (website.feed_url && website.feed_enabled) {
       try {
         console.log("Attempting RSS feed fetch for:", website.name);
-        const response = await fetch("/api/rss/articles", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ feedUrl: website.feed_url }),
-        });
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_APP_URL}/api/rss/articles`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ feedUrl: website.feed_url }),
+          }
+        );
 
         if (!response.ok) {
-          throw new Error("Failed to fetch RSS feed");
+          const errorText = await response.text();
+          console.error("RSS feed fetch failed:", {
+            status: response.status,
+            error: errorText,
+          });
+          throw new Error(`Failed to fetch RSS feed: ${errorText}`);
         }
 
         const { articles: feedArticles } = await response.json();
@@ -111,16 +123,24 @@ export async function updateWebsite(id: string): Promise<Website> {
     } else {
       // Only use scraping if RSS is not enabled
       console.log("Using web scraping for:", website.name);
-      const response = await fetch("/api/scrape/dynamic", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ url: website.url }),
-      });
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_APP_URL}/api/scrape/dynamic`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ url: website.url }),
+        }
+      );
 
       if (!response.ok) {
-        throw new Error("Failed to scrape website");
+        const errorText = await response.text();
+        console.error("Web scraping failed:", {
+          status: response.status,
+          error: errorText,
+        });
+        throw new Error(`Failed to scrape website: ${errorText}`);
       }
 
       const { articles: scrapedArticles } = await response.json();
@@ -223,14 +243,30 @@ export async function updateWebsite(id: string): Promise<Website> {
 
 export async function addWebsite(website: Partial<Website>): Promise<Website> {
   try {
+    if (!process.env.NEXT_PUBLIC_APP_URL) {
+      throw new Error("NEXT_PUBLIC_APP_URL is not set");
+    }
+
     // Detect RSS feed through API endpoint
-    const response = await fetch("/api/rss/detect", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ url: website.url }),
-    });
+    const response = await fetch(
+      `${process.env.NEXT_PUBLIC_APP_URL}/api/rss/detect`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ url: website.url }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("RSS feed detection failed:", {
+        status: response.status,
+        error: errorText,
+      });
+      throw new Error(`Failed to detect RSS feed: ${errorText}`);
+    }
 
     const { feedUrl } = await response.json();
 
