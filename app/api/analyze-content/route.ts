@@ -1,247 +1,172 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
-import * as cheerio from "cheerio";
-import axios from "axios";
+import puppeteer from "puppeteer-core";
+import chrome from "@sparticuz/chromium";
 
 export async function POST(request: Request) {
   try {
-    const { url: originalUrl } = await request.json();
-    console.log("Analyzing content for URL:", originalUrl);
+    const { url: targetUrl } = await request.json();
+    console.log("Analyzing content for URL:", targetUrl);
 
-    if (!originalUrl) {
-      console.error("No URL provided");
-      return NextResponse.json({ error: "URL is required" }, { status: 400 });
-    }
-
-    // Validate URL format
+    let browser;
     try {
-      new URL(originalUrl);
-    } catch (error) {
-      console.error("Invalid URL format:", originalUrl);
-      return NextResponse.json(
-        { error: "Invalid URL format" },
-        { status: 400 }
+      let executablePath: string;
+      let args: string[];
+
+      if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
+        // Running on Lambda/Vercel
+        executablePath = await chrome.executablePath();
+        args = chrome.args;
+      } else {
+        // Running locally - use system Chrome
+        executablePath =
+          process.platform === "win32"
+            ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+            : process.platform === "darwin"
+            ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            : "/usr/bin/google-chrome";
+        args = [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-accelerated-2d-canvas",
+          "--no-first-run",
+          "--no-zygote",
+          "--disable-gpu",
+        ];
+      }
+
+      browser = await puppeteer.launch({
+        args,
+        executablePath,
+        headless: true,
+        defaultViewport: {
+          width: 1920,
+          height: 1080,
+        },
+      });
+
+      const page = await browser.newPage();
+      await page.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
       );
-    }
 
-    let targetUrl = originalUrl;
-    console.log("Making request to URL:", targetUrl);
+      console.log("Navigating to URL:", targetUrl);
+      await page.goto(targetUrl, {
+        waitUntil: "networkidle0",
+        timeout: 30000,
+      });
 
-    const headers = {
-      "User-Agent":
-        "Mozilla/5.0 (compatible; CompetieEdge/1.0; +https://competiedge.vercel.app)",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.5",
-      "Accept-Encoding": "gzip, deflate",
-      Connection: "keep-alive",
-      "Cache-Control": "no-cache",
-      Pragma: "no-cache",
-    };
+      // Wait for any content to load
+      await page.waitForSelector(
+        'article, [class*="article"], [class*="post"], h1, h2, h3',
+        { timeout: 30000 }
+      );
 
-    const maxRetries = 3;
-    const retryDelay = 1000;
-    let lastError;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        if (attempt > 1) {
-          console.log(
-            `Retry attempt ${attempt}/${maxRetries} after ${retryDelay}ms`
-          );
-          await new Promise((resolve) => setTimeout(resolve, retryDelay));
-        }
-
-        const response = await axios.get(targetUrl, {
-          timeout: 60000,
-          maxRedirects: 10,
-          headers,
-          decompress: true,
-          validateStatus: function (status) {
-            return status >= 200 && status < 500;
-          },
-          maxBodyLength: 50 * 1024 * 1024,
-          responseType: "text",
-        });
-
-        if (!response.data) {
-          throw new Error("No content received from URL");
-        }
-
-        if (response.status === 403 || response.status === 429) {
-          throw new Error(`Request blocked with status ${response.status}`);
-        }
-
-        console.log("Successfully fetched content, parsing with cheerio");
-        const $ = cheerio.load(response.data);
-
-        // Extract key information
-        const wordCount = $("body")
-          .text()
+      // Extract metrics
+      const metrics = await page.evaluate((url) => {
+        const wordCount = document.body.innerText
           .split(/\s+/)
           .filter((word) => word.length > 0).length;
-        const headings = $("h1, h2, h3")
-          .map((_, el) => $(el).text().trim())
-          .get()
-          .filter((heading) => heading.length > 0);
 
-        // Extract actual links instead of just counting them
-        const links = $("a[href]")
-          .map((_, el) => {
-            const href = $(el).attr("href");
+        const headings = Array.from(
+          document.querySelectorAll("h1, h2, h3")
+        ).map((el) => el.textContent?.trim() || "");
+
+        const links = Array.from(document.querySelectorAll("a[href]"))
+          .map((el) => {
+            const href = el.getAttribute("href");
             if (!href || href === "#" || href.startsWith("javascript:"))
               return null;
             try {
-              // Convert relative URLs to absolute
-              const absoluteUrl = new URL(href, targetUrl).href;
-              return absoluteUrl;
-            } catch (e) {
+              return new URL(href, url).href;
+            } catch {
               return null;
             }
           })
-          .get()
           .filter(Boolean);
 
-        const images = $("img").length;
-
-        // Basic sentiment analysis
-        const text = $("body").text().toLowerCase();
-        const positiveWords = [
-          "great",
-          "innovative",
-          "best",
-          "leading",
-          "success",
-          "excellent",
-          "amazing",
-        ];
-        const negativeWords = [
-          "problem",
-          "issue",
-          "bad",
-          "worst",
-          "failure",
-          "poor",
-          "terrible",
-        ];
-
-        const sentiment = {
-          positive: positiveWords.filter((word) => text.includes(word)).length,
-          negative: negativeWords.filter((word) => text.includes(word)).length,
+        return {
+          wordCount,
+          headings,
+          links,
         };
+      }, targetUrl);
 
-        return NextResponse.json({
-          metrics: {
-            wordCount,
-            headings,
-            links,
-            images,
-            sentiment,
-          },
+      // Scroll and look for more content
+      let previousLength = metrics.links.length;
+      let noNewContentCount = 0;
+      const maxScrollAttempts = 5;
+
+      for (let i = 0; i < maxScrollAttempts; i++) {
+        console.log(`Scroll attempt ${i + 1}/${maxScrollAttempts}`);
+
+        await page.evaluate(() => {
+          window.scrollTo(0, document.body.scrollHeight);
         });
-      } catch (error) {
-        console.error(`Attempt ${attempt} failed:`, error);
-        lastError = error;
 
-        // If this was the last attempt, or if it's not a retryable error, throw
-        if (
-          attempt === maxRetries ||
-          !(
-            axios.isAxiosError(error) &&
-            (error.response?.status === 403 ||
-              error.response?.status === 429 ||
-              error.code === "ECONNABORTED")
-          )
-        ) {
-          break;
+        // Use the same waiting approach as manual scraping
+        await page.evaluate(
+          () => new Promise((resolve) => setTimeout(resolve, 2000))
+        );
+
+        try {
+          await page.waitForFunction(
+            (prevCount: number) => {
+              const elements = document.querySelectorAll(
+                'article, [class*="article"], [class*="post"], [role="article"]'
+              );
+              return elements.length > prevCount;
+            },
+            { timeout: 3000 },
+            previousLength
+          );
+        } catch (e) {
+          // No new content loaded
+        }
+
+        const newMetrics = await page.evaluate((url) => {
+          const links = Array.from(document.querySelectorAll("a[href]"))
+            .map((el) => {
+              const href = el.getAttribute("href");
+              if (!href || href === "#" || href.startsWith("javascript:"))
+                return null;
+              try {
+                return new URL(href, url).href;
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean);
+
+          return { links };
+        }, targetUrl);
+
+        if (newMetrics.links.length === previousLength) {
+          noNewContentCount++;
+          if (noNewContentCount >= 2) {
+            console.log(
+              "No new content found after multiple scrolls, stopping"
+            );
+            break;
+          }
+        } else {
+          noNewContentCount = 0;
+          previousLength = newMetrics.links.length;
+          metrics.links = newMetrics.links;
         }
       }
+
+      await browser.close();
+
+      return NextResponse.json({ metrics });
+    } catch (error) {
+      if (browser) await browser.close();
+      throw error;
     }
-
-    // If we got here, all retries failed
-    console.error("All retry attempts failed");
-
-    if (axios.isAxiosError(lastError)) {
-      console.error("Axios error details:", {
-        code: lastError.code,
-        status: lastError.response?.status,
-        statusText: lastError.response?.statusText,
-        headers: lastError.response?.headers,
-      });
-
-      if (lastError.code === "ECONNABORTED") {
-        return NextResponse.json({ error: "Request timeout" }, { status: 408 });
-      }
-      if (lastError.response?.status === 404) {
-        return NextResponse.json({ error: "Page not found" }, { status: 404 });
-      }
-      if (lastError.response?.status === 403) {
-        return NextResponse.json(
-          {
-            error:
-              "Access forbidden - website might be blocking automated requests",
-          },
-          { status: 403 }
-        );
-      }
-      if (lastError.response?.status === 429) {
-        return NextResponse.json(
-          { error: "Too many requests - rate limited by website" },
-          { status: 429 }
-        );
-      }
-    }
-
-    return NextResponse.json(
-      {
-        error: "Failed to analyze content",
-        details:
-          lastError instanceof Error ? lastError.message : String(lastError),
-      },
-      { status: 500 }
-    );
   } catch (error) {
-    console.error("Content analysis error:", {
-      url: request.url,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
-
-    if (axios.isAxiosError(error)) {
-      console.error("Axios error details:", {
-        code: error.code,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        headers: error.response?.headers,
-      });
-
-      if (error.code === "ECONNABORTED") {
-        return NextResponse.json({ error: "Request timeout" }, { status: 408 });
-      }
-      if (error.response?.status === 404) {
-        return NextResponse.json({ error: "Page not found" }, { status: 404 });
-      }
-      if (error.response?.status === 403) {
-        return NextResponse.json(
-          {
-            error:
-              "Access forbidden - website might be blocking automated requests",
-          },
-          { status: 403 }
-        );
-      }
-      if (error.response?.status === 429) {
-        return NextResponse.json(
-          { error: "Too many requests - rate limited by website" },
-          { status: 429 }
-        );
-      }
-    }
-
+    console.error("Error analyzing content:", error);
     return NextResponse.json(
-      {
-        error: "Failed to analyze content",
-        details: error instanceof Error ? error.message : String(error),
-      },
+      { error: "Failed to analyze content" },
       { status: 500 }
     );
   }
