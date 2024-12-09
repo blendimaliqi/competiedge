@@ -11,11 +11,14 @@ export async function POST(request: Request) {
     // Verify cron secret
     const { searchParams } = new URL(request.url);
     const secret = searchParams.get("secret");
+    const authHeader = request.headers.get("authorization");
+    const serviceRoleKey = authHeader?.replace("Bearer ", "");
 
     console.log("Notify endpoint called:", {
       hasSecret: !!secret,
       hasCronSecret: !!CRON_SECRET,
       secretMatch: secret === CRON_SECRET,
+      hasServiceRoleKey: !!serviceRoleKey,
     });
 
     if (!CRON_SECRET) {
@@ -32,6 +35,17 @@ export async function POST(request: Request) {
         expectedSecret: CRON_SECRET.substring(0, 5) + "...",
       });
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (
+      !serviceRoleKey ||
+      serviceRoleKey !== process.env.SUPABASE_SERVICE_ROLE_KEY
+    ) {
+      console.error("Invalid service role key");
+      return NextResponse.json(
+        { error: "Unauthorized - Invalid service role key" },
+        { status: 401 }
+      );
     }
 
     const { websiteId, newLinks } = await request.json();

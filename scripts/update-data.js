@@ -176,7 +176,7 @@ async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
   }
 }
 
-async function checkWebsite(website, appUrl, cronSecret) {
+async function checkWebsite(website, appUrl, cronSecret, serviceRoleKey) {
   console.log(`Checking website: ${website.name} (${website.url})`);
   console.log(`Website ID: ${website.id}`);
 
@@ -188,7 +188,12 @@ async function checkWebsite(website, appUrl, cronSecret) {
     );
     const updateResponse = await makeRequest(
       `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`,
-      {}
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${serviceRoleKey}`,
+        },
+      }
     );
 
     // Check for errors
@@ -212,6 +217,7 @@ async function checkWebsite(website, appUrl, cronSecret) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            Authorization: `Bearer ${serviceRoleKey}`,
           },
           body: JSON.stringify({
             websiteId: website.id,
@@ -240,13 +246,18 @@ async function main() {
       "- SUPABASE_ANON_KEY set:",
       !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
     );
+    console.log(
+      "- SUPABASE_SERVICE_ROLE_KEY set:",
+      !!process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL;
     const cronSecret = process.env.CRON_SECRET;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    if (!appUrl || !cronSecret) {
+    if (!appUrl || !cronSecret || !serviceRoleKey) {
       throw new Error(
-        "Missing required environment variables: NEXT_PUBLIC_APP_URL or CRON_SECRET"
+        "Missing required environment variables: NEXT_PUBLIC_APP_URL, CRON_SECRET, or SUPABASE_SERVICE_ROLE_KEY"
       );
     }
 
@@ -254,7 +265,12 @@ async function main() {
     console.log("Fetching websites to check...");
     const websitesResponse = await makeRequest(
       `${appUrl}/api/websites?secret=${cronSecret}`,
-      {}
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${serviceRoleKey}`,
+        },
+      }
     );
 
     const websites = websitesResponse.data || [];
@@ -262,7 +278,7 @@ async function main() {
 
     // Check each website for updates
     for (const website of websites) {
-      await checkWebsite(website, appUrl, cronSecret);
+      await checkWebsite(website, appUrl, cronSecret, serviceRoleKey);
     }
 
     console.log("Monitoring check completed successfully");
