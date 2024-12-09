@@ -83,16 +83,30 @@ export async function GET(request: Request, context: any) {
     // Find new links by comparing with previous snapshot
     let newLinks: string[] = [];
     if (previousSnapshot) {
+      console.log("Comparing links with previous snapshot:", {
+        previousLinks: previousSnapshot.metrics.links?.length || 0,
+        currentLinks: currentMetrics.links?.length || 0,
+      });
+
       const previousLinks = previousSnapshot.metrics.links || [];
       newLinks = currentMetrics.links.filter(
         (link: string) => !previousLinks.includes(link)
       );
-      console.log("Found new links:", newLinks);
+      console.log("Link comparison results:", {
+        newLinksFound: newLinks.length,
+        newLinks,
+      });
+    } else {
+      console.log("No previous snapshot found for comparison");
     }
 
     // If this is a cron job request (has secret), check for monitoring rules and send notifications
     if (secret === CRON_SECRET && newLinks.length > 0) {
-      console.log("Cron job detected, sending notifications for new links");
+      console.log("Attempting to send notifications for new links:", {
+        websiteId,
+        newLinksCount: newLinks.length,
+        appUrl: process.env.NEXT_PUBLIC_APP_URL,
+      });
       try {
         const notifyResponse = await fetch(
           `${process.env.NEXT_PUBLIC_APP_URL}/api/monitoring/notify?secret=${CRON_SECRET}`,
@@ -105,10 +119,24 @@ export async function GET(request: Request, context: any) {
             }),
           }
         );
-        console.log("Notification response:", await notifyResponse.json());
+
+        const notifyResult = await notifyResponse.json();
+        console.log("Notification response:", {
+          status: notifyResponse.status,
+          result: notifyResult,
+        });
+
+        if (!notifyResponse.ok) {
+          console.error("Notification request failed:", notifyResult);
+        }
       } catch (error) {
         console.error("Failed to send notifications:", error);
       }
+    } else {
+      console.log("Skipping notifications:", {
+        hasCronSecret: secret === CRON_SECRET,
+        hasNewLinks: newLinks.length > 0,
+      });
     }
 
     return NextResponse.json({

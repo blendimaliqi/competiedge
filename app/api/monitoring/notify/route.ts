@@ -11,6 +11,12 @@ export async function POST(request: Request) {
     const { searchParams } = new URL(request.url);
     const secret = searchParams.get("secret");
 
+    console.log("Notify endpoint called:", {
+      hasSecret: !!secret,
+      hasCronSecret: !!CRON_SECRET,
+      secretMatch: secret === CRON_SECRET,
+    });
+
     if (!CRON_SECRET) {
       console.error("CRON_SECRET is not set in environment variables");
       return NextResponse.json(
@@ -20,12 +26,18 @@ export async function POST(request: Request) {
     }
 
     if (secret !== CRON_SECRET) {
-      console.error("Secret mismatch");
+      console.error("Secret mismatch:", {
+        providedSecret: secret?.substring(0, 5) + "...",
+        expectedSecret: CRON_SECRET.substring(0, 5) + "...",
+      });
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const { websiteId, newLinks } = await request.json();
-    console.log("Received notification request:", { websiteId, newLinks });
+    console.log("Processing notification request:", {
+      websiteId,
+      newLinksCount: newLinks?.length,
+    });
 
     if (!websiteId || !newLinks) {
       console.error("Missing required fields:", { websiteId, newLinks });
@@ -38,27 +50,46 @@ export async function POST(request: Request) {
     // Get monitoring rules for this website
     const supabase = createRouteHandlerClient({ cookies });
     console.log("Fetching monitoring rules for website:", websiteId);
-    const { data: rules } = await supabase
+    const { data: rules, error: rulesError } = await supabase
       .from("monitoring_rules")
       .select("*")
       .eq("website_id", websiteId)
       .eq("enabled", true)
       .eq("type", "CONTENT_CHANGE");
 
-    console.log("Found monitoring rules:", rules);
+    if (rulesError) {
+      console.error("Error fetching monitoring rules:", rulesError);
+      return NextResponse.json(
+        { error: "Failed to fetch monitoring rules" },
+        { status: 500 }
+      );
+    }
+
+    console.log("Found monitoring rules:", {
+      count: rules?.length || 0,
+      rules: rules?.map((r) => ({ id: r.id, email: r.notifyEmail })),
+    });
 
     if (!rules || rules.length === 0) {
-      console.log("No monitoring rules found for website:", websiteId);
+      console.log("No active monitoring rules found for website:", websiteId);
       return NextResponse.json({ message: "No monitoring rules found" });
     }
 
     // Get the website URL for the email
     console.log("Fetching website details for:", websiteId);
-    const { data: website } = await supabase
+    const { data: website, error: websiteError } = await supabase
       .from("websites")
       .select("url")
       .eq("id", websiteId)
       .single();
+
+    if (websiteError) {
+      console.error("Error fetching website:", websiteError);
+      return NextResponse.json(
+        { error: "Failed to fetch website details" },
+        { status: 500 }
+      );
+    }
 
     console.log("Found website:", website);
 
@@ -68,30 +99,41 @@ export async function POST(request: Request) {
     }
 
     // Process each rule
+    const results = [];
     for (const rule of rules) {
       try {
-        console.log("Processing rule:", rule);
-        console.log("Sending notification email to:", rule.notifyEmail);
+        console.log("Processing rule:", {
+          ruleId: rule.id,
+          email: rule.notifyEmail,
+        });
+
         await monitoringService.sendNotification(
           rule.notifyEmail,
           website.url,
           newLinks
         );
-        console.log("Notification sent successfully");
+        console.log("Notification sent successfully for rule:", rule.id);
 
         console.log("Updating rule last_triggered timestamp");
-        await supabase
+        const { error: updateError } = await supabase
           .from("monitoring_rules")
           .update({ last_triggered: new Date().toISOString() })
           .eq("id", rule.id);
-        console.log("Rule updated successfully");
+
+        if (updateError) {
+          console.error("Error updating rule timestamp:", updateError);
+        } else {
+          console.log("Rule updated successfully");
+        }
+
+        results.push({ ruleId: rule.id, success: true });
       } catch (error) {
         console.error(`Error processing rule ${rule.id}:`, error);
-        // Continue with other rules even if one fails
+        results.push({ ruleId: rule.id, success: false, error: String(error) });
       }
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, results });
   } catch (error) {
     console.error("Error sending notifications:", error);
     return NextResponse.json(

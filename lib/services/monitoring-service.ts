@@ -51,26 +51,48 @@ export class MonitoringService {
   }
 
   async sendNotification(to: string, websiteUrl: string, newLinks: string[]) {
-    console.log("Sending notification for new links:", {
+    console.log("Starting sendNotification with:", {
       to,
       websiteUrl,
       newLinksCount: newLinks.length,
+      resendApiKey: process.env.RESEND_API_KEY ? "Set" : "Not set",
     });
+
+    if (!process.env.RESEND_API_KEY) {
+      console.error(
+        "RESEND_API_KEY is not set! Cannot send email notification."
+      );
+      throw new Error("Email service not configured - missing RESEND_API_KEY");
+    }
+
+    if (newLinks.length === 0) {
+      console.log("No new links to notify about, skipping email");
+      return;
+    }
 
     const formattedLinks = newLinks
       .map((link) => `• <a href="${link}">${link}</a>`)
       .join("<br>");
 
-    return this.sendEmail(
-      to,
-      `${newLinks.length} New Link${
-        newLinks.length === 1 ? "" : "s"
-      } Found on ${websiteUrl}`,
-      `
-        New links have been detected on ${websiteUrl}:<br><br>
-        ${formattedLinks}
-      `
-    );
+    console.log("Attempting to send email notification...");
+
+    try {
+      const result = await this.sendEmail(
+        to,
+        `${newLinks.length} New Link${
+          newLinks.length === 1 ? "" : "s"
+        } Found on ${websiteUrl}`,
+        `
+          New links have been detected on ${websiteUrl}:<br><br>
+          ${formattedLinks}
+        `
+      );
+      console.log("Email notification sent successfully:", result);
+      return result;
+    } catch (error) {
+      console.error("Failed to send email notification:", error);
+      throw error;
+    }
   }
 
   async checkArticleCountRule(rule: MonitoringRule) {
