@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
 import { cookies } from "next/headers";
 import { monitoringService } from "@/lib/services/monitoring-service";
+import { supabase, supabaseAdmin } from "@/lib/supabase";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -47,10 +48,12 @@ export async function POST(request: Request) {
       );
     }
 
+    // Use admin client for cron operations
+    const client = supabaseAdmin || supabase;
+
     // Get monitoring rules for this website
-    const supabase = createRouteHandlerClient({ cookies });
     console.log("Fetching monitoring rules for website:", websiteId);
-    const { data: rules, error: rulesError } = await supabase
+    const { data: rules, error: rulesError } = await client
       .from("monitoring_rules")
       .select("*")
       .eq("website_id", websiteId)
@@ -67,7 +70,7 @@ export async function POST(request: Request) {
 
     console.log("Found monitoring rules:", {
       count: rules?.length || 0,
-      rules: rules?.map((r) => ({ id: r.id, email: r.notifyEmail })),
+      rules: rules?.map((r: any) => ({ id: r.id, email: r.notifyEmail })),
     });
 
     if (!rules || rules.length === 0) {
@@ -77,7 +80,7 @@ export async function POST(request: Request) {
 
     // Get the website URL for the email
     console.log("Fetching website details for:", websiteId);
-    const { data: website, error: websiteError } = await supabase
+    const { data: website, error: websiteError } = await client
       .from("websites")
       .select("url")
       .eq("id", websiteId)
@@ -115,7 +118,7 @@ export async function POST(request: Request) {
         console.log("Notification sent successfully for rule:", rule.id);
 
         console.log("Updating rule last_triggered timestamp");
-        const { error: updateError } = await supabase
+        const { error: updateError } = await client
           .from("monitoring_rules")
           .update({ last_triggered: new Date().toISOString() })
           .eq("id", rule.id);

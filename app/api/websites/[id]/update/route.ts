@@ -1,155 +1,147 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
-import { updateWebsite } from "@/lib/services/website-service";
+import { supabase, supabaseAdmin } from "@/lib/supabase";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
 export async function GET(request: Request, context: any) {
   try {
-    // Get the website ID from the URL
     const websiteId = context.params.id;
-    console.log("Updating website:", websiteId);
-
-    // Check for cron secret if provided
     const { searchParams } = new URL(request.url);
     const secret = searchParams.get("secret");
 
-    // Only verify secret if it's provided (cron job)
-    if (secret) {
-      if (!CRON_SECRET) {
-        console.error("CRON_SECRET is not set in environment variables");
-        return NextResponse.json(
-          { error: "Server configuration error" },
-          { status: 500 }
-        );
-      }
+    // Use admin client for cron jobs
+    const client =
+      secret === CRON_SECRET ? supabaseAdmin || supabase : supabase;
 
-      if (secret !== CRON_SECRET) {
-        console.error("Secret mismatch");
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
+    // Update website last_checked timestamp
+    const { data: updatedWebsite, error: updateError } = await client
+      .from("websites")
+      .update({ last_checked: new Date().toISOString() })
+      .eq("id", websiteId)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error("Error updating website:", updateError);
+      return NextResponse.json(
+        { error: "Failed to update website" },
+        { status: 500 }
+      );
     }
 
-    // Update the website basic info first
-    const updatedWebsite = await updateWebsite(websiteId);
-    console.log("Website basic info updated:", updatedWebsite);
+    // Get website URL for content analysis
+    const { data: website } = await client
+      .from("websites")
+      .select("url")
+      .eq("id", websiteId)
+      .single();
 
-    // Perform content analysis
-    try {
-      // Get current content analysis
-      console.log("Analyzing content for URL:", updatedWebsite.url);
-      const response = await fetch(
-        process.env.NEXT_PUBLIC_APP_URL + "/api/analyze-content",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: updatedWebsite.url }),
-        }
-      );
+    if (!website?.url) {
+      return NextResponse.json({ error: "Website not found" }, { status: 404 });
+    }
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Content analysis failed:", {
-          status: response.status,
-          statusText: response.statusText,
-          error: errorText,
-        });
-        return NextResponse.json({
-          website: updatedWebsite,
-          message: "Update completed but analysis failed",
-          error: errorText,
-        });
+    // Analyze content
+    const response = await fetch(
+      process.env.NEXT_PUBLIC_APP_URL + "/api/analyze-content",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: website.url }),
       }
+    );
 
-      const { metrics: currentMetrics } = await response.json();
-
-      // Store the new snapshot
-      console.log("Storing new snapshot for website:", websiteId);
-      const { error: insertError } = await supabase
-        .from("content_snapshots")
-        .insert({
-          website_id: websiteId,
-          metrics: currentMetrics,
-          created_at: new Date().toISOString(),
-        });
-
-      if (insertError) {
-        console.error("Error storing snapshot:", insertError);
-        return NextResponse.json({
-          website: updatedWebsite,
-          message: "Update completed but failed to store snapshot",
-          error: insertError.message,
-        });
-      }
-
-      // Get the latest two snapshots to compare
-      const { data: snapshots, error: snapshotsError } = await supabase
-        .from("content_snapshots")
-        .select("*")
-        .eq("website_id", websiteId)
-        .order("created_at", { ascending: false })
-        .limit(2);
-
-      if (snapshotsError || !snapshots || snapshots.length < 2) {
-        console.log("Not enough snapshots for comparison");
-        return NextResponse.json({
-          website: updatedWebsite,
-          message: "Update completed but not enough snapshots for comparison",
-        });
-      }
-
-      const [currentSnapshot, previousSnapshot] = snapshots;
-      const previousLinks = previousSnapshot.metrics.links || [];
-      const newLinks = currentMetrics.links.filter(
-        (link: string) => !previousLinks.includes(link)
-      );
-
-      console.log("Found new links:", newLinks.length);
-
-      // If this is a cron job request and we found new links, send notifications
-      if (secret === CRON_SECRET && newLinks.length > 0) {
-        try {
-          const notifyResponse = await fetch(
-            `${process.env.NEXT_PUBLIC_APP_URL}/api/monitoring/notify?secret=${CRON_SECRET}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                websiteId,
-                newLinks,
-              }),
-            }
-          );
-
-          if (!notifyResponse.ok) {
-            console.error(
-              "Failed to send notifications:",
-              await notifyResponse.text()
-            );
-          }
-        } catch (error) {
-          console.error("Error sending notifications:", error);
-        }
-      }
-
-      return NextResponse.json({
-        website: updatedWebsite,
-        message: "Update completed",
-        newLinks,
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Content analysis failed:", {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText,
       });
-    } catch (error) {
-      console.error("Error in analysis:", error);
       return NextResponse.json({
         website: updatedWebsite,
         message: "Update completed but analysis failed",
-        error: error instanceof Error ? error.message : String(error),
+        error: errorText,
       });
     }
-  } catch (error) {
-    console.error("Error updating website:", {
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
+
+    const { metrics: currentMetrics } = await response.json();
+
+    // Store the new snapshot
+    console.log("Storing new snapshot for website:", websiteId);
+    const { error: insertError } = await client
+      .from("content_snapshots")
+      .insert({
+        website_id: websiteId,
+        metrics: currentMetrics,
+        created_at: new Date().toISOString(),
+      });
+
+    if (insertError) {
+      console.error("Error storing snapshot:", insertError);
+      return NextResponse.json({
+        website: updatedWebsite,
+        message: "Update completed but failed to store snapshot",
+        error: insertError.message,
+      });
+    }
+
+    // Get the latest two snapshots to compare
+    const { data: snapshots, error: snapshotsError } = await client
+      .from("content_snapshots")
+      .select("*")
+      .eq("website_id", websiteId)
+      .order("created_at", { ascending: false })
+      .limit(2);
+
+    if (snapshotsError || !snapshots || snapshots.length < 2) {
+      console.log("Not enough snapshots for comparison");
+      return NextResponse.json({
+        website: updatedWebsite,
+        message: "Update completed but not enough snapshots for comparison",
+      });
+    }
+
+    const [currentSnapshot, previousSnapshot] = snapshots;
+    const previousLinks = previousSnapshot.metrics.links || [];
+    const newLinks = currentMetrics.links.filter(
+      (link: string) => !previousLinks.includes(link)
+    );
+
+    console.log("Found new links:", newLinks.length);
+
+    // If this is a cron job request and we found new links, send notifications
+    if (secret === CRON_SECRET && newLinks.length > 0) {
+      try {
+        const notifyResponse = await fetch(
+          `${process.env.NEXT_PUBLIC_APP_URL}/api/monitoring/notify?secret=${CRON_SECRET}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              websiteId,
+              newLinks,
+            }),
+          }
+        );
+
+        if (!notifyResponse.ok) {
+          console.error(
+            "Failed to send notifications:",
+            await notifyResponse.text()
+          );
+        }
+      } catch (error) {
+        console.error("Error sending notifications:", error);
+      }
+    }
+
+    return NextResponse.json({
+      website: updatedWebsite,
+      message: "Update completed successfully",
+      newLinks: newLinks.length > 0 ? newLinks : undefined,
     });
+  } catch (error) {
+    console.error("Error updating website:", error);
     return NextResponse.json(
       {
         error: "Failed to update website",

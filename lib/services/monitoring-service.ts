@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseAdmin } from "@/lib/supabase";
 import { MonitoringRule, SocialMention } from "@/lib/types/monitoring";
 import { Resend } from "resend";
 
@@ -166,7 +166,7 @@ export class MonitoringService {
       console.log("Checking content change rule:", rule);
 
       // Get the website URL
-      const { data: website } = await supabase
+      const { data: website } = await (supabaseAdmin || supabase)
         .from("websites")
         .select("url")
         .eq("id", rule.websiteId)
@@ -178,7 +178,7 @@ export class MonitoringService {
       }
 
       // Get the previous content analysis
-      const { data: previousAnalysis } = await supabase
+      const { data: previousAnalysis } = await (supabaseAdmin || supabase)
         .from("content_snapshots")
         .select("*")
         .eq("website_id", rule.websiteId)
@@ -203,7 +203,9 @@ export class MonitoringService {
       const { metrics: currentMetrics } = await response.json();
 
       // Store the new snapshot
-      const { data: newSnapshot, error: snapshotError } = await supabase
+      const { data: newSnapshot, error: snapshotError } = await (
+        supabaseAdmin || supabase
+      )
         .from("content_snapshots")
         .insert({
           website_id: rule.websiteId,
@@ -234,7 +236,7 @@ export class MonitoringService {
       if (newLinks.length > 0) {
         await this.sendNotification(rule.notifyEmail, website.url, newLinks);
 
-        await supabase
+        await (supabaseAdmin || supabase)
           .from("monitoring_rules")
           .update({ last_triggered: new Date().toISOString() })
           .eq("id", rule.id);
@@ -247,7 +249,7 @@ export class MonitoringService {
 
   async checkAllRules() {
     // Check if monitoring is enabled
-    const { data: settings } = await supabase
+    const { data: settings } = await (supabaseAdmin || supabase)
       .from("system_settings")
       .select("value")
       .eq("key", "monitoring_status")
@@ -258,7 +260,7 @@ export class MonitoringService {
       return;
     }
 
-    const { data: rules } = await supabase
+    const { data: rules } = await (supabaseAdmin || supabase)
       .from("monitoring_rules")
       .select("*")
       .eq("enabled", true)
