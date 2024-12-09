@@ -100,9 +100,9 @@ export class MonitoringService {
       console.log("Checking article count rule:", rule);
 
       // For test emails, skip the website check
-      if (rule.websiteId === "test") {
+      if (rule.website_id === "test") {
         await this.sendEmail(
-          rule.notifyEmail,
+          rule.notify_email,
           "Test Email from CompetieEdge",
           "This is a test email to verify your monitoring setup is working correctly."
         );
@@ -112,16 +112,16 @@ export class MonitoringService {
       const { data: website } = await supabase
         .from("websites")
         .select("article_count")
-        .eq("id", rule.websiteId)
+        .eq("id", rule.website_id)
         .single();
 
       console.log("Website data:", website);
 
       if (website && website.article_count >= rule.threshold) {
         await this.sendEmail(
-          rule.notifyEmail,
+          rule.notify_email,
           "Article Count Threshold Reached",
-          `Website ${rule.websiteId} has reached ${website.article_count} articles`
+          `Website ${rule.website_id} has reached ${website.article_count} articles`
         );
 
         await supabase
@@ -141,7 +141,7 @@ export class MonitoringService {
     const { data: articles } = await supabase
       .from("articles")
       .select("*")
-      .eq("website_id", rule.websiteId)
+      .eq("website_id", rule.website_id)
       .ilike("title", `%${rule.keyword}%`)
       .order("created_at", { ascending: false })
       .limit(1);
@@ -149,7 +149,7 @@ export class MonitoringService {
     if (articles && articles.length > 0) {
       const lastArticle = articles[0];
       await this.sendEmail(
-        rule.notifyEmail,
+        rule.notify_email,
         `Keyword "${rule.keyword}" Detected`,
         `New article containing "${rule.keyword}" found: ${lastArticle.title}`
       );
@@ -169,7 +169,7 @@ export class MonitoringService {
       const { data: website } = await (supabaseAdmin || supabase)
         .from("websites")
         .select("url")
-        .eq("id", rule.websiteId)
+        .eq("id", rule.website_id)
         .single();
 
       if (!website?.url) {
@@ -181,7 +181,7 @@ export class MonitoringService {
       const { data: previousAnalysis } = await (supabaseAdmin || supabase)
         .from("content_snapshots")
         .select("*")
-        .eq("website_id", rule.websiteId)
+        .eq("website_id", rule.website_id)
         .order("created_at", { ascending: false })
         .limit(1)
         .single();
@@ -208,7 +208,7 @@ export class MonitoringService {
       )
         .from("content_snapshots")
         .insert({
-          website_id: rule.websiteId,
+          website_id: rule.website_id,
           metrics: currentMetrics,
           created_at: new Date().toISOString(),
         })
@@ -234,7 +234,7 @@ export class MonitoringService {
 
       // If new links found, send notification
       if (newLinks.length > 0) {
-        await this.sendNotification(rule.notifyEmail, website.url, newLinks);
+        await this.sendNotification(rule.notify_email, website.url, newLinks);
 
         await (supabaseAdmin || supabase)
           .from("monitoring_rules")
@@ -421,17 +421,43 @@ export class MonitoringService {
 
   async stopMonitoring(websiteId: string, userId: string) {
     try {
+      console.log("Attempting to stop monitoring:", { websiteId, userId });
+
+      // First, check if the rule exists
+      const { data: existingRules, error: fetchError } = await supabase
+        .from("monitoring_rules")
+        .select("*")
+        .eq("website_id", websiteId)
+        .eq("created_by", userId)
+        .eq("enabled", true);
+
+      if (fetchError) {
+        console.error("Error fetching existing rules:", fetchError);
+        throw fetchError;
+      }
+
+      console.log("Found existing rules:", existingRules);
+
+      if (!existingRules || existingRules.length === 0) {
+        console.log("No rules found to stop");
+        return null;
+      }
+
+      // Delete all rules for this website and user
       const { data, error } = await supabase
         .from("monitoring_rules")
         .delete()
         .eq("website_id", websiteId)
-        .eq("created_by", userId);
+        .eq("created_by", userId)
+        .eq("enabled", true)
+        .select();
 
       if (error) {
         console.error("Error stopping monitoring:", error);
         throw error;
       }
 
+      console.log("Successfully deleted monitoring rules:", data);
       return data;
     } catch (error) {
       console.error("Failed to stop monitoring:", error);

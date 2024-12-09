@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { monitoringService } from "@/lib/services/monitoring-service";
+import { MonitoringRule } from "@/lib/types/monitoring";
 
 export async function POST(request: Request) {
   try {
@@ -7,14 +8,19 @@ export async function POST(request: Request) {
     const { email } = await request.json();
     console.log("Sending test email to:", email);
 
-    await monitoringService.checkArticleCountRule({
+    const testRule: MonitoringRule = {
       id: "test",
-      websiteId: "test",
+      website_id: "test",
       type: "ARTICLE_COUNT",
       threshold: 0,
       enabled: true,
-      notifyEmail: email,
-    });
+      notify_email: email,
+      created_at: new Date().toISOString(),
+      created_by: "test",
+      last_triggered: undefined,
+    };
+
+    await monitoringService.checkArticleCountRule(testRule);
 
     console.log("Test email sent successfully");
     return NextResponse.json({ success: true });

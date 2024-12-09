@@ -1,17 +1,19 @@
 export interface MonitoringRule {
   id: string;
-  websiteId: string;
+  website_id: string;
   type: "ARTICLE_COUNT" | "KEYWORD" | "SOCIAL_MENTIONS" | "CONTENT_CHANGE";
   threshold: number;
   keyword?: string;
   enabled: boolean;
-  notifyEmail: string;
-  lastTriggered?: string;
+  notify_email: string;
+  last_triggered?: string;
+  created_by?: string;
+  created_at?: string;
 }
 
 export interface SocialMention {
   id: string;
-  websiteId: string;
+  website_id: string;
   platform: "twitter" | "linkedin" | "facebook";
   content: string;
   url: string;
@@ -20,5 +22,5 @@ export interface SocialMention {
     shares?: number;
     comments?: number;
   };
-  createdAt: string;
+  created_at: string;
 }

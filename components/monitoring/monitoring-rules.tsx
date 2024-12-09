@@ -5,13 +5,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { MonitoringRule } from "@/lib/types/monitoring";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
 import { AlertCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -27,14 +20,14 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
   const { user } = useAuth();
   const [newRule, setNewRule] = useState({
     type: "CONTENT_CHANGE" as RuleType,
-    notifyEmail: "",
+    notify_email: "",
   });
   const [error, setError] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
 
   // Get existing rules
-  const { data: rules } = useQuery({
+  const { data: rules, refetch } = useQuery({
     queryKey: ["monitoringRules", websiteId],
     queryFn: async () => {
       const response = await fetch(
@@ -43,17 +36,20 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
       if (!response.ok) {
         throw new Error("Failed to fetch monitoring rules");
       }
-      return response.json();
+      const data = await response.json();
+      console.log("Fetched rules:", data);
+      return data;
     },
   });
 
   // Get the active rule's email if it exists
   const activeRule = rules?.find((r: MonitoringRule) => r.enabled);
+  console.log("Active rule:", activeRule);
 
   const resetForm = () => {
     setNewRule({
       type: "CONTENT_CHANGE" as RuleType,
-      notifyEmail: "",
+      notify_email: "",
     });
     setError(null);
   };
@@ -61,7 +57,9 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
   // Test email mutation
   const testEmail = useMutation({
     mutationFn: async () => {
-      const emailToTest = activeRule?.notifyEmail || newRule.notifyEmail;
+      const emailToTest = activeRule?.notify_email || newRule.notify_email;
+      console.log("Testing email for:", emailToTest);
+
       if (!emailToTest) {
         throw new Error("Please enter an email address");
       }
@@ -84,12 +82,17 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
   });
 
   const createRule = useMutation({
-    mutationFn: async (rule: Omit<MonitoringRule, "id">) => {
+    mutationFn: async (
+      rule: Omit<
+        MonitoringRule,
+        "id" | "created_at" | "created_by" | "last_triggered"
+      >
+    ) => {
       if (!user) {
         throw new Error("You must be signed in to create monitoring rules");
       }
 
-      if (!rule.notifyEmail) {
+      if (!rule.notify_email) {
         throw new Error("Please enter an email address");
       }
 
@@ -99,7 +102,14 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
           "Content-Type": "application/json",
           credentials: "include",
         },
-        body: JSON.stringify(rule),
+        body: JSON.stringify({
+          websiteId: rule.website_id,
+          type: rule.type,
+          notify_email: rule.notify_email,
+          enabled: rule.enabled,
+          threshold: rule.threshold,
+          keyword: rule.keyword,
+        }),
       });
 
       if (!response.ok) {
@@ -125,6 +135,7 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
         throw new Error("You must be signed in to stop monitoring");
       }
 
+      console.log("Stopping monitoring for website:", websiteId);
       const response = await fetch("/api/monitoring/stop", {
         method: "POST",
         headers: {
@@ -141,8 +152,10 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
 
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["monitoringRules"] });
+    onSuccess: async () => {
+      console.log("Monitoring stopped, refreshing rules...");
+      await refetch();
+      resetForm();
       setError("Monitoring stopped successfully");
     },
     onError: (err) => {
@@ -152,21 +165,15 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
     },
   });
 
-  const handleTypeChange = (value: RuleType) => {
-    setNewRule({
-      ...newRule,
-      type: value,
-    });
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     createRule.mutate({
-      websiteId,
+      website_id: websiteId,
       type: newRule.type,
-      notifyEmail: newRule.notifyEmail,
+      notify_email: newRule.notify_email,
       enabled: true,
       threshold: newRule.type === "CONTENT_CHANGE" ? 0 : 1,
+      keyword: undefined,
     });
   };
 
@@ -190,7 +197,7 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
             onClick={() => testEmail.mutate()}
             disabled={
               testEmail.isPending ||
-              (!activeRule?.notifyEmail && !newRule.notifyEmail)
+              (!activeRule?.notify_email && !newRule.notify_email)
             }
           >
             {testEmail.isPending ? "Sending..." : "Test Email"}
@@ -199,7 +206,7 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
             variant="destructive"
             size="sm"
             onClick={() => stopMonitoring.mutate()}
-            disabled={stopMonitoring.isPending || !activeRule}
+            disabled={stopMonitoring.isPending || !activeRule?.enabled}
           >
             {stopMonitoring.isPending ? "Stopping..." : "Stop Monitoring"}
           </Button>
@@ -233,15 +240,15 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
           {activeRule ? (
             <div className="text-sm">
               Currently monitoring with email:{" "}
-              <strong>{activeRule.notifyEmail}</strong>
+              <strong>{activeRule.notify_email}</strong>
             </div>
           ) : (
             <Input
               type="email"
               placeholder="Notification Email"
-              value={newRule.notifyEmail}
+              value={newRule.notify_email}
               onChange={(e) =>
-                setNewRule({ ...newRule, notifyEmail: e.target.value })
+                setNewRule({ ...newRule, notify_email: e.target.value })
               }
               required
             />

@@ -41,7 +41,7 @@ export async function POST(request: Request) {
       websiteId,
       type = "CONTENT_CHANGE",
       threshold = type === "CONTENT_CHANGE" ? 0 : 1,
-      keyword,
+      keyword = null,
       enabled = true,
       notifyEmail,
     } = json;
@@ -68,22 +68,20 @@ export async function POST(request: Request) {
       );
     }
 
-    // Insert the new rule
+    // Insert the new rule with exact database column names
     const { data, error } = await supabase
       .from("monitoring_rules")
-      .insert([
-        {
-          website_id: websiteId,
-          type,
-          threshold,
-          keyword,
-          enabled,
-          notify_email: notifyEmail,
-          created_by: session.user.id,
-          created_at: new Date().toISOString(),
-          last_triggered: null,
-        },
-      ])
+      .insert({
+        website_id: websiteId,
+        type,
+        threshold,
+        keyword,
+        enabled,
+        notify_email: notifyEmail,
+        created_by: session.user.id,
+        created_at: new Date().toISOString(),
+        last_triggered: null,
+      })
       .select()
       .single();
 
@@ -92,6 +90,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    console.log("Created monitoring rule:", data);
     return NextResponse.json(data);
   } catch (error) {
     console.error("Error in monitoring rules POST:", error);
@@ -104,10 +103,8 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   try {
-    // Initialize Supabase client with cookie store
     const supabase = createRouteHandlerClient<Database>({ cookies });
 
-    // Get authenticated user
     const {
       data: { session },
       error: authError,
@@ -132,10 +129,12 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const websiteId = searchParams.get("websiteId");
 
+    // Query with exact database column names
     const query = supabase
       .from("monitoring_rules")
       .select("*")
-      .eq("created_by", session.user.id);
+      .eq("created_by", session.user.id)
+      .eq("enabled", true);
 
     if (websiteId) {
       query.eq("website_id", websiteId);
@@ -151,6 +150,7 @@ export async function GET(request: Request) {
       );
     }
 
+    console.log("Fetched monitoring rules:", data);
     return NextResponse.json(data);
   } catch (err) {
     console.error("Unexpected error:", err);
