@@ -47,9 +47,11 @@ export async function getWebsites(
 export async function updateWebsite(id: string): Promise<Website> {
   try {
     console.log("Starting website update for ID:", id);
+
+    // First, just get the basic website info without articles
     const { data: website, error: websiteError } = await supabase
       .from("websites")
-      .select("*, articles(*)")
+      .select("*")
       .eq("id", id)
       .single();
 
@@ -58,109 +60,10 @@ export async function updateWebsite(id: string): Promise<Website> {
       throw websiteError;
     }
 
-    if (!process.env.NEXT_PUBLIC_APP_URL) {
-      throw new Error("NEXT_PUBLIC_APP_URL is not set");
-    }
-
-    console.log("Fetched website data:", website);
-
-    // Store existing articles to preserve history
-    const existingArticles = (website.articles || []) as ArticleRow[];
-    const existingUrls = new Set(
-      existingArticles.map((article: ArticleRow) => article.url)
-    );
-    console.log("Existing article count:", existingArticles.length);
-
-    let newArticles: Article[] = [];
-    let usedMethod = "";
-
-    // Try RSS feed if available and enabled
-    if (website.feed_url && website.feed_enabled) {
-      try {
-        console.log("Attempting RSS feed fetch for:", website.name);
-        const response = await fetch(
-          `${process.env.NEXT_PUBLIC_APP_URL}/api/rss/articles`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ feedUrl: website.feed_url }),
-          }
-        );
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error("RSS feed fetch failed:", {
-            status: response.status,
-            error: errorText,
-          });
-          throw new Error(`Failed to fetch RSS feed: ${errorText}`);
-        }
-
-        const { articles: feedArticles } = await response.json();
-        console.log("RSS feed articles fetched:", feedArticles?.length || 0);
-
-        if (feedArticles && feedArticles.length > 0) {
-          usedMethod = "RSS";
-          newArticles = feedArticles.filter(
-            (article: Article) => !existingUrls.has(article.url)
-          );
-          console.log(
-            `Found ${newArticles.length} new articles via RSS for ${website.name}`
-          );
-        } else {
-          console.log(
-            "No articles found in RSS feed, not falling back to scraping"
-          );
-          newArticles = [];
-        }
-      } catch (error) {
-        console.error("RSS feed error:", error);
-        // Don't fall back to scraping if RSS is enabled but fails
-        newArticles = [];
-      }
-    } else {
-      // Only use scraping if RSS is not enabled
-      console.log("Using web scraping for:", website.name);
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_APP_URL}/api/scrape/dynamic`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ url: website.url }),
-        }
-      );
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Web scraping failed:", {
-          status: response.status,
-          error: errorText,
-        });
-        throw new Error(`Failed to scrape website: ${errorText}`);
-      }
-
-      const { articles: scrapedArticles } = await response.json();
-      console.log("Scraped articles:", scrapedArticles?.length || 0);
-      usedMethod = "Scraping";
-      newArticles = scrapedArticles.filter(
-        (article: Article) => !existingUrls.has(article.url)
-      );
-      console.log(
-        `Found ${newArticles.length} new articles via scraping for ${website.name}`
-      );
-    }
-
-    console.log(`Using ${usedMethod} method for ${website.name}`);
-
-    // Update website with total article count
+    // Update the last checked timestamp
     const { data: updatedWebsite, error: updateError } = await supabase
       .from("websites")
       .update({
-        article_count: existingArticles.length + newArticles.length,
         last_checked: new Date().toISOString(),
       })
       .eq("id", id)
@@ -172,65 +75,10 @@ export async function updateWebsite(id: string): Promise<Website> {
       throw updateError;
     }
 
-    console.log("Website updated with new article count");
-
-    // Insert only new articles with proper date handling
-    if (newArticles.length > 0) {
-      console.log("Inserting new articles:", newArticles.length);
-      const articlesData = newArticles.map((article: Article) => ({
-        website_id: id,
-        title: article.title?.substring(0, 255) || "Untitled",
-        url: article.url || "",
-        path: article.path || "",
-        summary: article.summary?.substring(0, 1000) || null,
-        published_date: parseDate(article.date),
-        first_seen: new Date().toISOString(),
-        hidden: false,
-      }));
-
-      const { error: articlesError } = await supabase
-        .from("articles")
-        .insert(articlesData);
-
-      if (articlesError) {
-        console.error("Articles insert error:", articlesError);
-        throw articlesError;
-      }
-      console.log("New articles inserted successfully");
-    }
-
-    // Get fresh articles data after update
-    const { data: freshArticles, error: freshArticlesError } = await supabase
-      .from("articles")
-      .select("*")
-      .eq("website_id", id)
-      .order("first_seen", { ascending: false });
-
-    if (freshArticlesError) {
-      console.error("Error fetching fresh articles:", freshArticlesError);
-      throw freshArticlesError;
-    }
-
-    console.log("Fetched fresh articles:", freshArticles.length);
-
-    // Map the database articles to the Article type
-    const mappedArticles = freshArticles.map(
-      (article: ArticleRow): Article => ({
-        id: article.id,
-        title: article.title,
-        url: article.url,
-        path: article.path,
-        summary: article.summary || undefined,
-        date: article.published_date || undefined,
-        firstSeen: article.first_seen,
-        hidden: article.hidden,
-      })
-    );
-
-    // Return updated website with fresh articles
+    // Return the basic website info
     return {
       ...updatedWebsite,
-      articles: mappedArticles,
+      articles: [], // Articles will be updated in the background
     };
   } catch (error) {
     console.error("Failed to update website:", error);
