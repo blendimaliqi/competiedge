@@ -6,36 +6,46 @@ import axios from "axios";
 export async function POST(request: Request) {
   try {
     const { url } = await request.json();
+    console.log("Analyzing content for URL:", url);
 
     if (!url) {
+      console.error("No URL provided");
       return NextResponse.json({ error: "URL is required" }, { status: 400 });
     }
 
     // Validate URL format
     try {
       new URL(url);
-    } catch {
+    } catch (error) {
+      console.error("Invalid URL format:", url);
       return NextResponse.json(
         { error: "Invalid URL format" },
         { status: 400 }
       );
     }
 
+    console.log("Making request to URL:", url);
     const response = await axios.get(url, {
-      timeout: 10000, // 10 second timeout
+      timeout: 30000, // Increased timeout to 30 seconds
       maxRedirects: 5,
       headers: {
-        "User-Agent": "CompetieEdge Monitor/1.0",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
       },
     });
 
     if (!response.data) {
+      console.error("No content received from URL:", url);
       return NextResponse.json(
         { error: "No content received from URL" },
         { status: 404 }
       );
     }
 
+    console.log("Successfully fetched content, parsing with cheerio");
     const $ = cheerio.load(response.data);
 
     // Extract key information
@@ -103,9 +113,20 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    console.error("Content analysis error:", error);
+    console.error("Content analysis error:", {
+      url: request.url,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
 
     if (axios.isAxiosError(error)) {
+      console.error("Axios error details:", {
+        code: error.code,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        headers: error.response?.headers,
+      });
+
       if (error.code === "ECONNABORTED") {
         return NextResponse.json({ error: "Request timeout" }, { status: 408 });
       }
@@ -114,14 +135,26 @@ export async function POST(request: Request) {
       }
       if (error.response?.status === 403) {
         return NextResponse.json(
-          { error: "Access forbidden" },
+          {
+            error:
+              "Access forbidden - website might be blocking automated requests",
+          },
           { status: 403 }
+        );
+      }
+      if (error.response?.status === 429) {
+        return NextResponse.json(
+          { error: "Too many requests - rate limited by website" },
+          { status: 429 }
         );
       }
     }
 
     return NextResponse.json(
-      { error: "Failed to analyze content" },
+      {
+        error: "Failed to analyze content",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 }
     );
   }
