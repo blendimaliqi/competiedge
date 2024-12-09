@@ -33,6 +33,23 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
 
   const queryClient = useQueryClient();
 
+  // Get existing rules
+  const { data: rules } = useQuery({
+    queryKey: ["monitoringRules", websiteId],
+    queryFn: async () => {
+      const response = await fetch(
+        `/api/monitoring/rules?websiteId=${websiteId}`
+      );
+      if (!response.ok) {
+        throw new Error("Failed to fetch monitoring rules");
+      }
+      return response.json();
+    },
+  });
+
+  // Get the active rule's email if it exists
+  const activeRule = rules?.find((r: MonitoringRule) => r.enabled);
+
   const resetForm = () => {
     setNewRule({
       type: "CONTENT_CHANGE" as RuleType,
@@ -44,13 +61,14 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
   // Test email mutation
   const testEmail = useMutation({
     mutationFn: async () => {
-      if (!newRule.notifyEmail) {
+      const emailToTest = activeRule?.notifyEmail || newRule.notifyEmail;
+      if (!emailToTest) {
         throw new Error("Please enter an email address");
       }
       const response = await fetch("/api/monitoring/test-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: newRule.notifyEmail }),
+        body: JSON.stringify({ email: emailToTest }),
       });
       if (!response.ok) throw new Error("Failed to send test email");
       return response.json();
@@ -170,7 +188,10 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
             variant="outline"
             size="sm"
             onClick={() => testEmail.mutate()}
-            disabled={testEmail.isPending || !newRule.notifyEmail}
+            disabled={
+              testEmail.isPending ||
+              (!activeRule?.notifyEmail && !newRule.notifyEmail)
+            }
           >
             {testEmail.isPending ? "Sending..." : "Test Email"}
           </Button>
@@ -178,7 +199,7 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
             variant="destructive"
             size="sm"
             onClick={() => stopMonitoring.mutate()}
-            disabled={stopMonitoring.isPending}
+            disabled={stopMonitoring.isPending || !activeRule}
           >
             {stopMonitoring.isPending ? "Stopping..." : "Stop Monitoring"}
           </Button>
@@ -209,19 +230,28 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
             </ul>
           </div>
 
-          <Input
-            type="email"
-            placeholder="Notification Email"
-            value={newRule.notifyEmail}
-            onChange={(e) =>
-              setNewRule({ ...newRule, notifyEmail: e.target.value })
-            }
-            required
-          />
+          {activeRule ? (
+            <div className="text-sm">
+              Currently monitoring with email:{" "}
+              <strong>{activeRule.notifyEmail}</strong>
+            </div>
+          ) : (
+            <Input
+              type="email"
+              placeholder="Notification Email"
+              value={newRule.notifyEmail}
+              onChange={(e) =>
+                setNewRule({ ...newRule, notifyEmail: e.target.value })
+              }
+              required
+            />
+          )}
 
-          <Button type="submit" disabled={createRule.isPending}>
-            {createRule.isPending ? "Setting up..." : "Start Monitoring"}
-          </Button>
+          {!activeRule && (
+            <Button type="submit" disabled={createRule.isPending}>
+              {createRule.isPending ? "Setting up..." : "Start Monitoring"}
+            </Button>
+          )}
         </form>
       </Card>
     </div>
