@@ -43,7 +43,7 @@ export async function POST(request: Request) {
       threshold = type === "CONTENT_CHANGE" ? 0 : 1,
       keyword = null,
       enabled = true,
-      notifyEmail,
+      notify_email,
     } = json;
 
     // Validate required fields
@@ -61,7 +61,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!notifyEmail) {
+    if (!notify_email) {
       return NextResponse.json(
         { error: "Notification email is required" },
         { status: 400 }
@@ -77,7 +77,7 @@ export async function POST(request: Request) {
         threshold,
         keyword,
         enabled,
-        notify_email: notifyEmail,
+        notify_email,
         created_by: session.user.id,
         created_at: new Date().toISOString(),
         last_triggered: null,
