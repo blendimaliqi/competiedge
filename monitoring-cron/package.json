@@ -1,0 +1,16 @@
+{
+  "name": "competiedge-monitoring",
+  "version": "1.0.0",
+  "description": "Website monitoring cron job for CompetIEdge",
+  "main": "scripts/update-data.js",
+  "scripts": {
+    "start": "node scripts/update-data.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "node-fetch": "^2.6.1",
+    "dotenv": "^16.0.3",
+    "p-retry": "^4.6.1",
+    "p-timeout": "^4.1.0"
+  }
+}

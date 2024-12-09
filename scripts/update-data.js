@@ -181,7 +181,7 @@ async function checkWebsite(website, appUrl, cronSecret) {
   console.log(`Website ID: ${website.id}`);
 
   try {
-    // First, initiate the update
+    // Make the update request
     console.log(
       "Making update request to:",
       `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`
@@ -191,26 +191,17 @@ async function checkWebsite(website, appUrl, cronSecret) {
       {}
     );
 
-    // Wait for a short time to allow background processing
-    console.log("Waiting for analysis to complete...");
-    await sleep(15000); // Wait 15 seconds
-
-    // Check for analysis results
-    console.log("Checking analysis results...");
-    const analysisResponse = await makeRequest(
-      `${appUrl}/api/websites/${website.id}/analysis?secret=${cronSecret}`,
-      {}
-    );
-
-    if (analysisResponse.error) {
-      console.error("Analysis failed:", analysisResponse.error);
+    // Check for errors
+    if (updateResponse.error) {
+      console.error("Update failed:", updateResponse.error);
       return;
     }
 
-    if (analysisResponse.newLinks && analysisResponse.newLinks.length > 0) {
+    // Check for new links in the update response
+    if (updateResponse.newLinks && updateResponse.newLinks.length > 0) {
       console.log(
-        `Found ${analysisResponse.newLinks.length} new links for ${website.name}:`,
-        analysisResponse.newLinks
+        `Found ${updateResponse.newLinks.length} new links for ${website.name}:`,
+        updateResponse.newLinks
       );
 
       // Send notification
@@ -224,7 +215,7 @@ async function checkWebsite(website, appUrl, cronSecret) {
           },
           body: JSON.stringify({
             websiteId: website.id,
-            newLinks: analysisResponse.newLinks,
+            newLinks: updateResponse.newLinks,
           }),
         }
       );
