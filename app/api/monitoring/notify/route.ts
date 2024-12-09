@@ -84,7 +84,7 @@ export async function POST(request: Request) {
 
     console.log("Found monitoring rules:", {
       count: rules?.length || 0,
-      rules: rules?.map((r: any) => ({ id: r.id, email: r.notifyEmail })),
+      rules: rules?.map((r: any) => ({ id: r.id, email: r.notify_email })),
     });
 
     if (!rules || rules.length === 0) {
@@ -121,11 +121,11 @@ export async function POST(request: Request) {
       try {
         console.log("Processing rule:", {
           ruleId: rule.id,
-          email: rule.notifyEmail,
+          email: rule.notify_email,
         });
 
         await monitoringService.sendNotification(
-          rule.notifyEmail,
+          rule.notify_email,
           website.url,
           newLinks
         );
