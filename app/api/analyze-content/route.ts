@@ -5,26 +5,38 @@ import axios from "axios";
 
 export async function POST(request: Request) {
   try {
-    const { url } = await request.json();
-    console.log("Analyzing content for URL:", url);
+    const { url: originalUrl } = await request.json();
+    console.log("Analyzing content for URL:", originalUrl);
 
-    if (!url) {
+    if (!originalUrl) {
       console.error("No URL provided");
       return NextResponse.json({ error: "URL is required" }, { status: 400 });
     }
 
     // Validate URL format
     try {
-      new URL(url);
+      new URL(originalUrl);
     } catch (error) {
-      console.error("Invalid URL format:", url);
+      console.error("Invalid URL format:", originalUrl);
       return NextResponse.json(
         { error: "Invalid URL format" },
         { status: 400 }
       );
     }
 
-    console.log("Making request to URL:", url);
+    let targetUrl = originalUrl;
+    console.log("Making request to URL:", targetUrl);
+
+    const headers = {
+      "User-Agent":
+        "Mozilla/5.0 (compatible; CompetieEdge/1.0; +https://competiedge.vercel.app)",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.5",
+      "Accept-Encoding": "gzip, deflate",
+      Connection: "keep-alive",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    };
 
     const maxRetries = 3;
     const retryDelay = 1000;
@@ -39,32 +51,16 @@ export async function POST(request: Request) {
           await new Promise((resolve) => setTimeout(resolve, retryDelay));
         }
 
-        const response = await axios.get(url, {
-          timeout: 30000, // Increased timeout to 30 seconds
-          maxRedirects: 5,
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            Accept:
-              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Cache-Control": "no-cache",
-            Connection: "keep-alive",
-            "Sec-Ch-Ua":
-              '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1",
-            Referer: new URL(url).origin,
-          },
+        const response = await axios.get(targetUrl, {
+          timeout: 60000,
+          maxRedirects: 10,
+          headers,
+          decompress: true,
           validateStatus: function (status) {
-            return status < 500; // Accept all status codes less than 500
+            return status >= 200 && status < 500;
           },
+          maxBodyLength: 50 * 1024 * 1024,
+          responseType: "text",
         });
 
         if (!response.data) {
@@ -96,7 +92,7 @@ export async function POST(request: Request) {
               return null;
             try {
               // Convert relative URLs to absolute
-              const absoluteUrl = new URL(href, url).href;
+              const absoluteUrl = new URL(href, targetUrl).href;
               return absoluteUrl;
             } catch (e) {
               return null;
