@@ -8,16 +8,8 @@
   "buildCommand": "npm run build",
   "installCommand": "npm install --legacy-peer-deps",
   "functions": {
-    "app/api/scrape/dynamic/route.ts": {
-      "memory": 1024,
-      "maxDuration": 60
-    },
-    "app/api/monitoring/rules/route.ts": {
-      "memory": 512,
-      "maxDuration": 10
-    },
-    "app/api/cron/check-monitoring/route.ts": {
-      "memory": 1024,
+    "app/api/**/*": {
+      "memory": 3008,
       "maxDuration": 60
     }
   },
@@ -25,5 +17,16 @@
     "deploymentEnabled": {
       "main": true
     }
-  }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, no-cache"
+        }
+      ]
+    }
+  ]
 }
