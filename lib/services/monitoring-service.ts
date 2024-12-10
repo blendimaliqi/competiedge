@@ -604,33 +604,12 @@ export class MonitoringService {
     try {
       console.log("Attempting to stop monitoring:", { websiteId, userId });
 
-      // First, check if the rule exists
-      const { data: existingRules, error: fetchError } = await supabase
-        .from("monitoring_rules")
-        .select("*")
-        .eq("website_id", websiteId)
-        .eq("created_by", userId)
-        .eq("enabled", true);
-
-      if (fetchError) {
-        console.error("Error fetching existing rules:", fetchError);
-        throw fetchError;
-      }
-
-      console.log("Found existing rules:", existingRules);
-
-      if (!existingRules || existingRules.length === 0) {
-        console.log("No rules found to stop");
-        return null;
-      }
-
-      // Delete all rules for this website and user
+      // Update all rules to disabled state instead of deleting
       const { data, error } = await supabase
         .from("monitoring_rules")
-        .delete()
+        .update({ enabled: false })
         .eq("website_id", websiteId)
         .eq("created_by", userId)
-        .eq("enabled", true)
         .select();
 
       if (error) {
@@ -638,7 +617,23 @@ export class MonitoringService {
         throw error;
       }
 
-      console.log("Successfully deleted monitoring rules:", data);
+      // Verify the update was successful
+      const { data: verifyRules, error: verifyError } = await supabase
+        .from("monitoring_rules")
+        .select("*")
+        .eq("website_id", websiteId)
+        .eq("created_by", userId)
+        .eq("enabled", true);
+
+      if (verifyError) {
+        console.error("Error verifying rule updates:", verifyError);
+      } else if (verifyRules && verifyRules.length > 0) {
+        console.warn("Some rules may still be enabled:", verifyRules);
+      } else {
+        console.log("Successfully verified all rules are disabled");
+      }
+
+      console.log("Successfully stopped monitoring:", data);
       return data;
     } catch (error) {
       console.error("Failed to stop monitoring:", error);
