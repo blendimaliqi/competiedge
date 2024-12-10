@@ -37,7 +37,18 @@ function isArticleUrl(url: string): boolean {
       path.includes("/comment") ||
       path.includes("/trackback") ||
       path.includes("/cdn-cgi/") ||
-      path.match(/\.(jpg|jpeg|png|gif|css|js|xml|txt)$/)
+      path.match(/\.(jpg|jpeg|png|gif|css|js|xml|txt)$/) ||
+      path.includes("/widget") ||
+      path.includes("/banner") ||
+      path.includes("/advertisement") ||
+      path.includes("/subscribe") ||
+      path.includes("/newsletter") ||
+      path.includes("/account") ||
+      path.includes("/profile") ||
+      path.includes("/settings") ||
+      path.includes("/preferences") ||
+      path.includes("/notification") ||
+      path.includes("/alert")
     ) {
       return false;
     }
@@ -54,6 +65,11 @@ function isArticleUrl(url: string): boolean {
       "/video/",
       "/p/",
       "/entry/",
+      // Norwegian indicators
+      "/artikkel/",
+      "/nyhet/",
+      "/sak/",
+      "/innlegg/",
     ];
 
     if (articleIndicators.some((indicator) => path.includes(indicator))) {
@@ -61,12 +77,24 @@ function isArticleUrl(url: string): boolean {
     }
 
     // Check if path has a reasonable structure for an article
-    // e.g., /2023/12/article-title or /section/article-title
     const segments = path.split("/").filter(Boolean);
     if (
       segments.length >= 2 &&
       segments[segments.length - 1].length > 10 &&
-      !segments[segments.length - 1].includes("=")
+      !segments[segments.length - 1].includes("=") &&
+      // Check for common article path patterns
+      // Pattern: /year/month/title
+      ((segments.length === 3 &&
+        /^\d{4}$/.test(segments[0]) &&
+        /^\d{2}$/.test(segments[1])) ||
+        // Pattern: /section/subsection/title
+        (segments.length === 3 &&
+          segments[0].length > 2 &&
+          segments[1].length > 2) ||
+        // Pattern: /section/title
+        (segments.length === 2 &&
+          segments[0].length > 2 &&
+          segments[1].length > 15))
     ) {
       return true;
     }
@@ -74,6 +102,54 @@ function isArticleUrl(url: string): boolean {
     return false;
   } catch (e) {
     return false;
+  }
+}
+
+// Helper function to get canonical path from URL
+function getCanonicalPath(url: string): string {
+  try {
+    const parsedUrl = new URL(url);
+    // Remove query parameters and hash
+    let path = parsedUrl.pathname.toLowerCase();
+    // Remove trailing slash
+    path = path.replace(/\/$/, "");
+    // Remove common prefixes
+    path = path.replace(/^\/article\/|^\/post\/|^\/story\/|^\/news\//, "");
+    // Remove date segments
+    path = path.replace(/^\/\d{4}\/\d{2}\//, "");
+    return path;
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
+function normalizeUrl(url: string): string {
+  try {
+    const parsedUrl = new URL(url);
+    // Remove UTM parameters and other tracking parameters
+    const searchParams = new URLSearchParams(parsedUrl.search);
+    [
+      "utm_source",
+      "utm_medium",
+      "utm_campaign",
+      "utm_term",
+      "utm_content",
+      "dre",
+      "referer",
+      "vgfront",
+    ].forEach((param) => {
+      searchParams.delete(param);
+    });
+
+    // Remove fragment
+    parsedUrl.hash = "";
+
+    // Update search params
+    parsedUrl.search = searchParams.toString();
+
+    return parsedUrl.toString();
+  } catch {
+    return url;
   }
 }
 
@@ -333,7 +409,7 @@ export async function GET(request: Request, context: any) {
       return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
 
-    // Get existing articles
+    // Get existing articles - remove time window to check against ALL articles
     const { data: existingArticles } = await client
       .from("articles")
       .select("url")
@@ -347,10 +423,9 @@ export async function GET(request: Request, context: any) {
     const currentMetrics = await analyzeContent(website.url);
     const currentLinks = (currentMetrics.links || []).filter(isArticleUrl);
 
-    // Find new links by comparing with existing articles
-    const newLinks = currentLinks.filter(
-      (link: any) => !existingUrls.has(link)
-    );
+    // Find new links by comparing with ALL existing articles
+    const newLinks = currentLinks.filter((link) => !existingUrls.has(link));
+
     console.log("Found new article links:", newLinks.length);
 
     // Store new articles

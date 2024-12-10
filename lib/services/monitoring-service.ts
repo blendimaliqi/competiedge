@@ -2,6 +2,36 @@ import { supabase, supabaseAdmin } from "@/lib/supabase";
 import { MonitoringRule, SocialMention } from "@/lib/types/monitoring";
 import { Resend } from "resend";
 
+function normalizeUrl(url: string): string {
+  try {
+    const parsedUrl = new URL(url);
+    // Remove UTM parameters and other tracking parameters
+    const searchParams = new URLSearchParams(parsedUrl.search);
+    [
+      "utm_source",
+      "utm_medium",
+      "utm_campaign",
+      "utm_term",
+      "utm_content",
+      "dre",
+      "referer",
+      "vgfront",
+    ].forEach((param) => {
+      searchParams.delete(param);
+    });
+
+    // Remove fragment
+    parsedUrl.hash = "";
+
+    // Update search params
+    parsedUrl.search = searchParams.toString();
+
+    return parsedUrl.toString();
+  } catch {
+    return url;
+  }
+}
+
 export class MonitoringService {
   private resend: Resend;
 
@@ -260,8 +290,11 @@ export class MonitoringService {
 
       // Check for new links
       const previousLinks = previousAnalysis.metrics.links || [];
-      const newLinks = currentMetrics.links.filter(
-        (link: string) => !previousLinks.includes(link)
+      const normalizedPreviousLinks = previousLinks.map(normalizeUrl);
+      const normalizedCurrentLinks = currentMetrics.links.map(normalizeUrl);
+
+      const newLinks = normalizedCurrentLinks.filter(
+        (link: string) => !normalizedPreviousLinks.includes(link)
       );
 
       // If new links found, send notification
