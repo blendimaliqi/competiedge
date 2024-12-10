@@ -525,7 +525,7 @@ export class MonitoringService {
 
       return data;
     } catch (error) {
-      console.error("Failed to resume monitoring:", error);
+      console.error("Failed to resume monitoring s:", error);
       throw error;
     }
   }
