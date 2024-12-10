@@ -13,11 +13,9 @@ export async function POST(request: Request) {
       let args: string[];
 
       if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
-        // Running on Lambda/Vercel
         executablePath = await chrome.executablePath();
-        args = chrome.args;
+        args = [...chrome.args, "--single-process"];
       } else {
-        // Running locally - use system Chrome
         executablePath =
           process.platform === "win32"
             ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
@@ -31,6 +29,7 @@ export async function POST(request: Request) {
           "--disable-accelerated-2d-canvas",
           "--no-first-run",
           "--no-zygote",
+          "--single-process",
           "--disable-gpu",
         ];
       }
@@ -50,19 +49,37 @@ export async function POST(request: Request) {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
       );
 
-      console.log("Navigating to URL:", targetUrl);
-      await page.goto(targetUrl, {
-        waitUntil: "networkidle0",
-        timeout: 30000,
+      page.setDefaultNavigationTimeout(5000);
+      page.setDefaultTimeout(5000);
+
+      await page.setRequestInterception(true);
+      page.on("request", (request) => {
+        const resourceType = request.resourceType();
+        if (
+          resourceType === "image" ||
+          resourceType === "stylesheet" ||
+          resourceType === "font"
+        ) {
+          request.abort();
+        } else {
+          request.continue();
+        }
       });
 
-      // Wait for any content to load
-      await page.waitForSelector(
-        'article, [class*="article"], [class*="post"], h1, h2, h3',
-        { timeout: 30000 }
-      );
+      console.log("Navigating to URL:", targetUrl);
+      await page.goto(targetUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 5000,
+      });
 
-      // Extract metrics
+      await Promise.race([
+        page.waitForSelector(
+          'article, [class*="article"], [class*="post"], h1, h2, h3',
+          { timeout: 3000 }
+        ),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
+
       const metrics = await page.evaluate((url) => {
         const wordCount = document.body.innerText
           .split(/\s+/)
@@ -92,72 +109,29 @@ export async function POST(request: Request) {
         };
       }, targetUrl);
 
-      // Scroll and look for more content
-      let previousLength = metrics.links.length;
-      let noNewContentCount = 0;
-      const maxScrollAttempts = 5;
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.evaluate(
+        () => new Promise((resolve) => setTimeout(resolve, 1000))
+      );
 
-      for (let i = 0; i < maxScrollAttempts; i++) {
-        console.log(`Scroll attempt ${i + 1}/${maxScrollAttempts}`);
+      const newLinks = await page.evaluate((url) => {
+        return Array.from(document.querySelectorAll("a[href]"))
+          .map((el) => {
+            const href = el.getAttribute("href");
+            if (!href || href === "#" || href.startsWith("javascript:"))
+              return null;
+            try {
+              return new URL(href, url).href;
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean);
+      }, targetUrl);
 
-        await page.evaluate(() => {
-          window.scrollTo(0, document.body.scrollHeight);
-        });
-
-        // Use the same waiting approach as manual scraping
-        await page.evaluate(
-          () => new Promise((resolve) => setTimeout(resolve, 2000))
-        );
-
-        try {
-          await page.waitForFunction(
-            (prevCount: number) => {
-              const elements = document.querySelectorAll(
-                'article, [class*="article"], [class*="post"], [role="article"]'
-              );
-              return elements.length > prevCount;
-            },
-            { timeout: 3000 },
-            previousLength
-          );
-        } catch (e) {
-          // No new content loaded
-        }
-
-        const newMetrics = await page.evaluate((url) => {
-          const links = Array.from(document.querySelectorAll("a[href]"))
-            .map((el) => {
-              const href = el.getAttribute("href");
-              if (!href || href === "#" || href.startsWith("javascript:"))
-                return null;
-              try {
-                return new URL(href, url).href;
-              } catch {
-                return null;
-              }
-            })
-            .filter(Boolean);
-
-          return { links };
-        }, targetUrl);
-
-        if (newMetrics.links.length === previousLength) {
-          noNewContentCount++;
-          if (noNewContentCount >= 2) {
-            console.log(
-              "No new content found after multiple scrolls, stopping"
-            );
-            break;
-          }
-        } else {
-          noNewContentCount = 0;
-          previousLength = newMetrics.links.length;
-          metrics.links = newMetrics.links;
-        }
-      }
+      metrics.links = [...new Set([...metrics.links, ...newLinks])];
 
       await browser.close();
-
       return NextResponse.json({ metrics });
     } catch (error) {
       if (browser) await browser.close();
