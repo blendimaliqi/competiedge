@@ -643,7 +643,21 @@ export class MonitoringService {
         throw error;
       }
 
-      // Double verify that all rules are disabled
+      // Check if there are any remaining active rules for any website
+      const { data: activeRules, error: activeError } = await supabase
+        .from("monitoring_rules")
+        .select("id")
+        .eq("enabled", true)
+        .limit(1);
+
+      if (activeError) {
+        console.error("Error checking active rules:", activeError);
+      } else if (!activeRules || activeRules.length === 0) {
+        // If no active rules remain, pause global monitoring
+        await this.pauseMonitoring(userId);
+      }
+
+      // Double verify that all rules for this website are disabled
       const { data: verifyRules, error: verifyError } = await supabase
         .from("monitoring_rules")
         .select("*")
