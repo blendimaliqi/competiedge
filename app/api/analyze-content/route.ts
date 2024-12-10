@@ -100,7 +100,7 @@ export async function POST(request: Request) {
               return null;
             }
           })
-          .filter(Boolean);
+          .filter(Boolean) as string[];
 
         return {
           wordCount,
@@ -126,10 +126,10 @@ export async function POST(request: Request) {
               return null;
             }
           })
-          .filter(Boolean);
+          .filter(Boolean) as string[];
       }, targetUrl);
 
-      metrics.links = [...new Set([...metrics.links, ...newLinks])];
+      metrics.links = Array.from(new Set(metrics.links.concat(newLinks)));
 
       await browser.close();
       return NextResponse.json({ metrics });
