@@ -604,20 +604,46 @@ export class MonitoringService {
     try {
       console.log("Attempting to stop monitoring:", { websiteId, userId });
 
-      // Update all rules to disabled state instead of deleting
+      // First, get all rules for this website and user
+      const { data: existingRules, error: fetchError } = await supabase
+        .from("monitoring_rules")
+        .select("*")
+        .eq("website_id", websiteId)
+        .eq("created_by", userId);
+
+      if (fetchError) {
+        console.error("Error fetching rules:", fetchError);
+        throw fetchError;
+      }
+
+      console.log("Found rules to disable:", existingRules);
+
+      if (!existingRules || existingRules.length === 0) {
+        console.log("No rules found to disable");
+        return null;
+      }
+
+      // Update all rules to disabled state
       const { data, error } = await supabase
         .from("monitoring_rules")
-        .update({ enabled: false })
+        .update({
+          enabled: false,
+          last_triggered: new Date().toISOString(),
+        })
         .eq("website_id", websiteId)
         .eq("created_by", userId)
+        .in(
+          "id",
+          existingRules.map((rule) => rule.id)
+        )
         .select();
 
       if (error) {
-        console.error("Error stopping monitoring:", error);
+        console.error("Error disabling rules:", error);
         throw error;
       }
 
-      // Verify the update was successful
+      // Double verify that all rules are disabled
       const { data: verifyRules, error: verifyError } = await supabase
         .from("monitoring_rules")
         .select("*")
@@ -626,14 +652,22 @@ export class MonitoringService {
         .eq("enabled", true);
 
       if (verifyError) {
-        console.error("Error verifying rule updates:", verifyError);
+        console.error("Error verifying rules:", verifyError);
       } else if (verifyRules && verifyRules.length > 0) {
-        console.warn("Some rules may still be enabled:", verifyRules);
-      } else {
-        console.log("Successfully verified all rules are disabled");
+        console.warn("Some rules still enabled:", verifyRules);
+        // Force disable any remaining enabled rules
+        await supabase
+          .from("monitoring_rules")
+          .update({ enabled: false })
+          .eq("website_id", websiteId)
+          .eq("created_by", userId)
+          .in(
+            "id",
+            verifyRules.map((rule) => rule.id)
+          );
       }
 
-      console.log("Successfully stopped monitoring:", data);
+      console.log("Successfully disabled all monitoring rules:", data);
       return data;
     } catch (error) {
       console.error("Failed to stop monitoring:", error);

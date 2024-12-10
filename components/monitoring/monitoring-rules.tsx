@@ -40,6 +40,10 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
       console.log("Fetched rules:", data);
       return data;
     },
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
   });
 
   // Get the active rule's email if it exists
@@ -154,6 +158,11 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
     },
     onSuccess: async () => {
       console.log("Monitoring stopped, refreshing rules...");
+      // Invalidate both monitoring rules and status queries
+      queryClient.invalidateQueries({
+        queryKey: ["monitoringRules", websiteId],
+      });
+      queryClient.invalidateQueries({ queryKey: ["monitoringStatus"] });
       await refetch();
       resetForm();
       setError("Monitoring stopped successfully");
