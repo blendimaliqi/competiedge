@@ -2,342 +2,9 @@ import { NextResponse } from "next/server";
 import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
 import { cookies } from "next/headers";
 import { supabase, supabaseAdmin } from "@/lib/supabase";
-import * as cheerio from "cheerio";
-import axios from "axios";
-import puppeteer from "puppeteer-core";
-import chrome from "@sparticuz/chromium";
+import { dynamicScraper } from "@/lib/services/dynamic-scraper";
 
 const CRON_SECRET = process.env.CRON_SECRET;
-
-// Helper function to check if a URL is likely an article
-function isArticleUrl(url: string): boolean {
-  try {
-    const parsedUrl = new URL(url);
-    const path = parsedUrl.pathname.toLowerCase();
-
-    // Skip common non-article paths
-    if (
-      path === "/" ||
-      path.includes("/tag/") ||
-      path.includes("/category/") ||
-      path.includes("/author/") ||
-      path.includes("/search") ||
-      path.includes("/login") ||
-      path.includes("/signup") ||
-      path.includes("/register") ||
-      path.includes("/about") ||
-      path.includes("/contact") ||
-      path.includes("/privacy") ||
-      path.includes("/terms") ||
-      path.includes("/feed") ||
-      path.includes("/rss") ||
-      path.includes("/sitemap") ||
-      path.includes("/wp-") ||
-      path.includes("/page/") ||
-      path.includes("/comment") ||
-      path.includes("/trackback") ||
-      path.includes("/cdn-cgi/") ||
-      path.match(/\.(jpg|jpeg|png|gif|css|js|xml|txt)$/) ||
-      path.includes("/widget") ||
-      path.includes("/banner") ||
-      path.includes("/advertisement") ||
-      path.includes("/subscribe") ||
-      path.includes("/newsletter") ||
-      path.includes("/account") ||
-      path.includes("/profile") ||
-      path.includes("/settings") ||
-      path.includes("/preferences") ||
-      path.includes("/notification") ||
-      path.includes("/alert")
-    ) {
-      return false;
-    }
-
-    // Check for article indicators
-    const articleIndicators = [
-      "/article/",
-      "/post/",
-      "/story/",
-      "/news/",
-      "/blog/",
-      "/read/",
-      "/watch/",
-      "/video/",
-      "/p/",
-      "/entry/",
-      // Norwegian indicators
-      "/artikkel/",
-      "/nyhet/",
-      "/sak/",
-      "/innlegg/",
-    ];
-
-    if (articleIndicators.some((indicator) => path.includes(indicator))) {
-      return true;
-    }
-
-    // Check if path has a reasonable structure for an article
-    const segments = path.split("/").filter(Boolean);
-    if (
-      segments.length >= 2 &&
-      segments[segments.length - 1].length > 10 &&
-      !segments[segments.length - 1].includes("=") &&
-      // Check for common article path patterns
-      // Pattern: /year/month/title
-      ((segments.length === 3 &&
-        /^\d{4}$/.test(segments[0]) &&
-        /^\d{2}$/.test(segments[1])) ||
-        // Pattern: /section/subsection/title
-        (segments.length === 3 &&
-          segments[0].length > 2 &&
-          segments[1].length > 2) ||
-        // Pattern: /section/title
-        (segments.length === 2 &&
-          segments[0].length > 2 &&
-          segments[1].length > 15))
-    ) {
-      return true;
-    }
-
-    return false;
-  } catch (e) {
-    return false;
-  }
-}
-
-// Helper function to get canonical path from URL
-function getCanonicalPath(url: string): string {
-  try {
-    const parsedUrl = new URL(url);
-    // Remove query parameters and hash
-    let path = parsedUrl.pathname.toLowerCase();
-    // Remove trailing slash
-    path = path.replace(/\/$/, "");
-    // Remove common prefixes
-    path = path.replace(/^\/article\/|^\/post\/|^\/story\/|^\/news\//, "");
-    // Remove date segments
-    path = path.replace(/^\/\d{4}\/\d{2}\//, "");
-    return path;
-  } catch {
-    return url.toLowerCase();
-  }
-}
-
-function normalizeUrl(url: string): string {
-  try {
-    const parsedUrl = new URL(url);
-    // Remove UTM parameters and other tracking parameters
-    const searchParams = new URLSearchParams(parsedUrl.search);
-    [
-      "utm_source",
-      "utm_medium",
-      "utm_campaign",
-      "utm_term",
-      "utm_content",
-      "dre",
-      "referer",
-      "vgfront",
-    ].forEach((param) => {
-      searchParams.delete(param);
-    });
-
-    // Remove fragment
-    parsedUrl.hash = "";
-
-    // Update search params
-    parsedUrl.search = searchParams.toString();
-
-    return parsedUrl.toString();
-  } catch {
-    return url;
-  }
-}
-
-async function analyzeContent(url: string) {
-  // First try with Cheerio (fast)
-  try {
-    const response = await axios.get(url, {
-      timeout: 5000,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-    });
-
-    const $ = cheerio.load(response.data);
-    const metrics = {
-      wordCount: $("body")
-        .text()
-        .split(/\s+/)
-        .filter((word) => word.length > 0).length,
-      headings: $("h1, h2, h3")
-        .map((_, el) => $(el).text().trim())
-        .get(),
-      links: $("a[href]")
-        .map((_, el) => {
-          const href = $(el).attr("href");
-          if (!href || href === "#" || href.startsWith("javascript:"))
-            return null;
-          try {
-            return new URL(href, url).href;
-          } catch {
-            return null;
-          }
-        })
-        .get()
-        .filter(Boolean),
-    };
-
-    // Check if the page might be dynamic
-    const hasDynamicIndicators =
-      $("[data-react-root]").length > 0 ||
-      $("#__next").length > 0 ||
-      $("#app").length > 0 ||
-      $('script[src*="react"]').length > 0 ||
-      $('script[src*="vue"]').length > 0 ||
-      $('script[src*="angular"]').length > 0;
-
-    if (!hasDynamicIndicators) {
-      return metrics;
-    }
-
-    // If dynamic indicators found, fallback to Puppeteer
-    console.log("Dynamic content detected, using Puppeteer");
-  } catch (error) {
-    console.log("Cheerio attempt failed, falling back to Puppeteer");
-  }
-
-  // Fallback to Puppeteer for dynamic content
-  let browser;
-  try {
-    let executablePath: string;
-    let args: string[];
-
-    if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
-      executablePath = await chrome.executablePath();
-      args = [...chrome.args, "--single-process"];
-    } else {
-      executablePath =
-        process.platform === "win32"
-          ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-          : process.platform === "darwin"
-          ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-          : "/usr/bin/google-chrome";
-      args = [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-accelerated-2d-canvas",
-        "--no-first-run",
-        "--no-zygote",
-        "--single-process",
-        "--disable-gpu",
-      ];
-    }
-
-    browser = await puppeteer.launch({
-      args,
-      executablePath,
-      headless: true,
-      defaultViewport: {
-        width: 1920,
-        height: 1080,
-      },
-    });
-
-    const page = await browser.newPage();
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    );
-
-    page.setDefaultNavigationTimeout(5000);
-    page.setDefaultTimeout(5000);
-
-    await page.setRequestInterception(true);
-    page.on("request", (request) => {
-      const resourceType = request.resourceType();
-      if (
-        resourceType === "image" ||
-        resourceType === "stylesheet" ||
-        resourceType === "font"
-      ) {
-        request.abort();
-      } else {
-        request.continue();
-      }
-    });
-
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: 5000,
-    });
-
-    await Promise.race([
-      page.waitForSelector(
-        'article, [class*="article"], [class*="post"], h1, h2, h3',
-        { timeout: 3000 }
-      ),
-      new Promise((resolve) => setTimeout(resolve, 3000)),
-    ]);
-
-    const metrics = await page.evaluate((url) => {
-      const wordCount = document.body.innerText
-        .split(/\s+/)
-        .filter((word) => word.length > 0).length;
-
-      const headings = Array.from(document.querySelectorAll("h1, h2, h3")).map(
-        (el) => el.textContent?.trim() || ""
-      );
-
-      const links = Array.from(document.querySelectorAll("a[href]"))
-        .map((el) => {
-          const href = el.getAttribute("href");
-          if (!href || href === "#" || href.startsWith("javascript:"))
-            return null;
-          try {
-            return new URL(href, url).href;
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean) as string[];
-
-      return {
-        wordCount,
-        headings,
-        links,
-      };
-    }, url);
-
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.evaluate(
-      () => new Promise((resolve) => setTimeout(resolve, 1000))
-    );
-
-    const newLinks = await page.evaluate((url) => {
-      return Array.from(document.querySelectorAll("a[href]"))
-        .map((el) => {
-          const href = el.getAttribute("href");
-          if (!href || href === "#" || href.startsWith("javascript:"))
-            return null;
-          try {
-            return new URL(href, url).href;
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean) as string[];
-    }, url);
-
-    metrics.links = Array.from(new Set(metrics.links.concat(newLinks)));
-
-    await browser.close();
-    return metrics;
-  } catch (error) {
-    if (browser) await browser.close();
-    throw error;
-  }
-}
 
 export async function GET(request: Request, context: any) {
   try {
@@ -350,7 +17,6 @@ export async function GET(request: Request, context: any) {
     console.log("Update endpoint called:", {
       websiteId,
       hasSecret: !!secret,
-      hasCronSecret: !!CRON_SECRET,
       secretMatch: secret === CRON_SECRET,
       hasServiceRoleKey: !!serviceRoleKey,
     });
@@ -382,26 +48,10 @@ export async function GET(request: Request, context: any) {
     // Use admin client for cron jobs
     const client = supabaseAdmin || supabase;
 
-    // Update website last_checked timestamp
-    const { data: updatedWebsite, error: updateError } = await client
-      .from("websites")
-      .update({ last_checked: new Date().toISOString() })
-      .eq("id", websiteId)
-      .select()
-      .single();
-
-    if (updateError) {
-      console.error("Error updating website:", updateError);
-      return NextResponse.json(
-        { error: "Failed to update website" },
-        { status: 500 }
-      );
-    }
-
     // Get website URL for content analysis
     const { data: website } = await client
       .from("websites")
-      .select("url")
+      .select("url, custom_content_patterns, custom_skip_patterns")
       .eq("id", websiteId)
       .single();
 
@@ -419,59 +69,62 @@ export async function GET(request: Request, context: any) {
       existingArticles?.map((article) => article.url) || []
     );
 
-    // Analyze content directly
-    const currentMetrics = await analyzeContent(website.url);
-    const currentLinks = (currentMetrics.links || []).filter(isArticleUrl);
+    // Use dynamic scraper to get articles
+    const { articles } = await dynamicScraper.scrape(website.url);
 
-    // Find new links by comparing with ALL existing articles
-    const newLinks = currentLinks.filter((link) => !existingUrls.has(link));
+    // Find new articles by comparing with existing ones
+    const newArticles = articles.filter(
+      (article) => !existingUrls.has(article.url)
+    );
 
-    console.log("Found new article links:", newLinks.length);
+    console.log("Found new articles:", newArticles.length);
 
     // Store new articles
-    if (newLinks.length > 0) {
+    if (newArticles.length > 0) {
       const { error: articlesError } = await client.from("articles").insert(
-        newLinks.map((url: string) => ({
+        newArticles.map((article) => ({
           website_id: websiteId,
-          url,
-          title: url, // You might want to fetch the actual title
-          path: new URL(url).pathname,
-          first_seen: new Date().toISOString(),
+          title: article.title,
+          url: article.url,
+          path: article.path,
+          summary: article.summary,
+          published_date: article.date,
+          first_seen: article.firstSeen,
         }))
       );
 
       if (articlesError) {
-        console.error("Error storing new articles:", articlesError);
-        return NextResponse.json({
-          website: updatedWebsite,
-          message: "Update completed but failed to store new articles",
-          error: articlesError.message,
-        });
-      }
-
-      // Update article count
-      const { error: countError } = await client
-        .from("websites")
-        .update({
-          article_count: (existingArticles?.length || 0) + newLinks.length,
-        })
-        .eq("id", websiteId);
-
-      if (countError) {
-        console.error("Error updating article count:", countError);
+        console.error("Error inserting articles:", articlesError);
+        return NextResponse.json(
+          { error: "Failed to store articles" },
+          { status: 500 }
+        );
       }
     }
 
+    // Update website last_checked timestamp and article count
+    const { error: updateError } = await client
+      .from("websites")
+      .update({
+        last_checked: new Date().toISOString(),
+        article_count: (existingArticles?.length || 0) + newArticles.length,
+      })
+      .eq("id", websiteId);
+
+    if (updateError) {
+      console.error("Error updating website:", updateError);
+      return NextResponse.json(
+        { error: "Failed to update website" },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
-      website: updatedWebsite,
-      message: "Update completed successfully",
-      newLinks,
+      message: "Website updated successfully",
+      newArticles: newArticles,
     });
   } catch (error) {
-    console.error("Error in website update:", error);
-    return NextResponse.json(
-      { error: "Failed to update website" },
-      { status: 500 }
-    );
+    console.error("Update error:", error);
+    return NextResponse.json({ error: "Update failed" }, { status: 500 });
   }
 }

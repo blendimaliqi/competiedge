@@ -173,10 +173,11 @@ export class ArticleScraper {
         const url = href.startsWith("http")
           ? href
           : new URL(href, baseUrl).href;
-        const urlObj = new URL(url);
+        const normalizedUrl = this.normalizeUrl(url);
+        const urlObj = new URL(normalizedUrl);
         const path = urlObj.pathname.toLowerCase();
 
-        if (this.shouldSkipUrl(path, url, seenUrls)) return;
+        if (this.shouldSkipUrl(path, normalizedUrl, seenUrls)) return;
 
         const title = $element.text().trim();
         if (this.shouldSkipTitle(title)) return;
@@ -185,12 +186,12 @@ export class ArticleScraper {
           const article = this.extractArticleData(
             $,
             $element,
-            url,
+            normalizedUrl,
             path,
             title
           );
           if (article) {
-            seenUrls.add(url);
+            seenUrls.add(normalizedUrl);
             articles.push(article);
           }
         }
@@ -275,5 +276,62 @@ export class ArticleScraper {
       summary: summary || undefined,
       firstSeen: new Date().toISOString(),
     };
+  }
+
+  private normalizeUrl(url: string): string {
+    try {
+      const parsedUrl = new URL(url);
+
+      // Remove all query parameters that are used for tracking
+      const searchParams = new URLSearchParams(parsedUrl.search);
+      const paramsToRemove = [
+        // UTM parameters
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        // VG specific parameters
+        "dre",
+        "referer",
+        "vgfront",
+        // Common tracking parameters
+        "fbclid",
+        "gclid",
+        "msclkid",
+        "_ga",
+        "_gl",
+        "ref",
+        "source",
+        "medium",
+        "campaign",
+      ];
+
+      paramsToRemove.forEach((param) => {
+        searchParams.delete(param);
+        // Also remove any parameter that starts with these prefixes
+        Array.from(searchParams.keys()).forEach((key) => {
+          if (key.startsWith(param + "_") || key.includes("dre-")) {
+            searchParams.delete(key);
+          }
+        });
+      });
+
+      // Remove fragment
+      parsedUrl.hash = "";
+
+      // Clean up the pathname
+      let path = parsedUrl.pathname.toLowerCase();
+      path = path.replace(/\/+$/, ""); // Remove trailing slashes
+      parsedUrl.pathname = path;
+
+      // Update search params
+      const remainingParams = searchParams.toString();
+      parsedUrl.search = remainingParams ? `?${remainingParams}` : "";
+
+      return parsedUrl.toString();
+    } catch {
+      return url;
+    }
   }
 }
