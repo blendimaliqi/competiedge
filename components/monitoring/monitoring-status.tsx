@@ -20,6 +20,8 @@ export function MonitoringStatus() {
       }
       return response.json();
     },
+    staleTime: 0,
+    gcTime: 0,
     refetchInterval: 30000, // Refresh every 30 seconds
   });
 
