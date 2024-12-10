@@ -3,6 +3,8 @@ import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
 import { cookies } from "next/headers";
 import { supabase, supabaseAdmin } from "@/lib/supabase";
 import { dynamicScraper } from "@/lib/services/dynamic-scraper";
+import { monitoringService } from "@/lib/services/monitoring-service";
+import { MonitoringRule } from "@/lib/types/monitoring";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -48,40 +50,69 @@ export async function GET(request: Request, context: any) {
     // Use admin client for cron jobs
     const client = supabaseAdmin || supabase;
 
-    // Get website URL for content analysis
-    const { data: website } = await client
+    // Get website info including monitoring rules
+    const { data: website, error: websiteError } = await client
       .from("websites")
-      .select("url, custom_content_patterns, custom_skip_patterns")
+      .select(
+        `
+        *,
+        monitoring_rules (
+          id,
+          enabled,
+          notify_email,
+          type
+        )
+      `
+      )
       .eq("id", websiteId)
       .single();
+
+    if (websiteError) {
+      console.error("Error fetching website:", websiteError);
+      return NextResponse.json(
+        { error: "Failed to fetch website data" },
+        { status: 500 }
+      );
+    }
 
     if (!website?.url) {
       return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
 
-    // Get existing articles - remove time window to check against ALL articles
-    const { data: existingArticles } = await client
+    // Get existing articles
+    const { data: existingArticles, error: articlesError } = await client
       .from("articles")
       .select("url")
       .eq("website_id", websiteId);
+
+    if (articlesError) {
+      console.error("Error fetching existing articles:", articlesError);
+      return NextResponse.json(
+        { error: "Failed to fetch existing articles" },
+        { status: 500 }
+      );
+    }
 
     const existingUrls = new Set(
       existingArticles?.map((article) => article.url) || []
     );
 
+    console.log(`Found ${existingUrls.size} existing articles`);
+
     // Use dynamic scraper to get articles
+    console.log(`Starting scrape of ${website.url}`);
     const { articles } = await dynamicScraper.scrape(website.url);
+    console.log(`Scraping complete, found ${articles.length} total articles`);
 
     // Find new articles by comparing with existing ones
     const newArticles = articles.filter(
       (article) => !existingUrls.has(article.url)
     );
-
-    console.log("Found new articles:", newArticles.length);
+    console.log(`Found ${newArticles.length} new articles`);
 
     // Store new articles
     if (newArticles.length > 0) {
-      const { error: articlesError } = await client.from("articles").insert(
+      const { error: insertError } = await client.from("articles").insert(
         newArticles.map((article) => ({
           website_id: websiteId,
           title: article.title,
@@ -93,12 +124,61 @@ export async function GET(request: Request, context: any) {
         }))
       );
 
-      if (articlesError) {
-        console.error("Error inserting articles:", articlesError);
+      if (insertError) {
+        console.error("Error inserting articles:", insertError);
         return NextResponse.json(
           { error: "Failed to store articles" },
           { status: 500 }
         );
+      }
+
+      console.log(`Successfully stored ${newArticles.length} new articles`);
+
+      // Send notifications for new articles
+      const activeRules = (
+        website.monitoring_rules as MonitoringRule[]
+      )?.filter((rule) => rule.enabled && rule.type === "CONTENT_CHANGE");
+
+      console.log(`Found ${activeRules?.length || 0} active monitoring rules`);
+
+      if (activeRules?.length > 0) {
+        for (const rule of activeRules) {
+          try {
+            // Format articles for notification
+            const formattedLinks = newArticles.map((article) => {
+              const url = new URL(article.url);
+              // Remove tracking parameters
+              url.search = "";
+              url.hash = "";
+              return url.toString();
+            });
+
+            console.log(
+              `Sending notification to ${rule.notify_email} with ${formattedLinks.length} links`
+            );
+
+            await monitoringService.sendNotification(
+              rule.notify_email,
+              website.url,
+              formattedLinks
+            );
+
+            // Update last triggered time for the rule
+            const { error: updateRuleError } = await client
+              .from("monitoring_rules")
+              .update({ last_triggered: new Date().toISOString() })
+              .eq("id", rule.id);
+
+            if (updateRuleError) {
+              console.error(
+                "Error updating rule last_triggered:",
+                updateRuleError
+              );
+            }
+          } catch (error) {
+            console.error("Error sending notification:", error);
+          }
+        }
       }
     }
 
@@ -122,6 +202,7 @@ export async function GET(request: Request, context: any) {
     return NextResponse.json({
       message: "Website updated successfully",
       newArticles: newArticles,
+      totalArticles: (existingArticles?.length || 0) + newArticles.length,
     });
   } catch (error) {
     console.error("Update error:", error);

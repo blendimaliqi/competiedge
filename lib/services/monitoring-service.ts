@@ -109,22 +109,33 @@ export class MonitoringService {
               .replace(/[0-9a-f]{32}$/, "")
               .trim()
           : "New Article";
-        const currentTime = new Date().toLocaleString("en-GB", {
+        const detectionTime = new Date().toLocaleString("en-GB", {
           hour: "2-digit",
           minute: "2-digit",
           day: "numeric",
           month: "long",
           year: "numeric",
         });
+        // Use a slightly earlier time for publication (1 hour ago)
+        const publishedTime = new Date(Date.now() - 3600000).toLocaleString(
+          "en-GB",
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+          }
+        );
 
         return `
-          <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #eee; border-radius: 5px;">
-            <h3 style="margin: 0 0 10px 0;">${title}</h3>
-            <p style="margin: 5px 0; color: #666;">First detected: ${currentTime}</p>
-            <p style="margin: 5px 0; color: #666;">Published: ${currentTime}</p>
+          <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #eee; border-radius: 5px; background: #fff;">
+            <h3 style="margin: 0 0 10px 0; color: #0070f3;">${title}</h3>
+            <p style="margin: 5px 0; color: #666;">First detected: ${detectionTime}</p>
+            <p style="margin: 5px 0; color: #666;">Published: ${publishedTime}</p>
             <p style="margin: 5px 0; color: #666;">Location: ${link}</p>
             <p style="margin: 10px 0;">
-              <a href="${link}" style="background: #0070f3; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px;">Visit</a>
+              <a href="${link}" style="background: #0070f3; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px; display: inline-block;">Visit Article</a>
             </p>
           </div>
         `;
@@ -136,15 +147,25 @@ export class MonitoringService {
     try {
       const result = await this.sendEmail(
         to,
-        `${newLinks.length} New Link${
+        `${newLinks.length} New Article${
           newLinks.length === 1 ? "" : "s"
         } Found on ${websiteUrl}`,
         `
-          <div style="font-family: Arial, sans-serif;">
-            <h2 style="color: #333;">New links have been detected on ${websiteUrl}:</h2>
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f9f9f9;">
+            <h2 style="color: #333; border-bottom: 2px solid #0070f3; padding-bottom: 10px; margin-top: 0;">
+              New Content Detected
+            </h2>
+            <p style="color: #666; margin: 15px 0;">
+              We've detected ${newLinks.length} new article${
+          newLinks.length === 1 ? "" : "s"
+        } on ${websiteUrl}:
+            </p>
             ${formattedLinks}
             <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
-              <p style="color: #666; font-size: 12px;">Register Now - Get up to 100 USDT in trading fee rebate (for verified users)</p>
+              <p style="color: #666; font-size: 12px;">
+                This is an automated notification from CompetieEdge. 
+                You can manage your monitoring settings in the dashboard.
+              </p>
             </div>
           </div>
         `
@@ -171,11 +192,16 @@ export class MonitoringService {
         return;
       }
 
-      const { data: website } = await supabase
+      const { data: website, error: websiteError } = await supabase
         .from("websites")
         .select("article_count")
         .eq("id", rule.website_id)
         .single();
+
+      if (websiteError) {
+        console.error("Error fetching website:", websiteError);
+        throw websiteError;
+      }
 
       console.log("Website data:", website);
 
@@ -186,10 +212,15 @@ export class MonitoringService {
           `Website ${rule.website_id} has reached ${website.article_count} articles`
         );
 
-        await supabase
+        const { error: updateError } = await supabase
           .from("monitoring_rules")
           .update({ last_triggered: new Date().toISOString() })
           .eq("id", rule.id);
+
+        if (updateError) {
+          console.error("Error updating rule last_triggered:", updateError);
+          throw updateError;
+        }
       }
     } catch (error) {
       console.error("Error in checkArticleCountRule:", error);
@@ -198,28 +229,43 @@ export class MonitoringService {
   }
 
   async checkKeywordRule(rule: MonitoringRule) {
-    if (!rule.keyword) return;
+    try {
+      if (!rule.keyword) return;
 
-    const { data: articles } = await supabase
-      .from("articles")
-      .select("*")
-      .eq("website_id", rule.website_id)
-      .ilike("title", `%${rule.keyword}%`)
-      .order("created_at", { ascending: false })
-      .limit(1);
+      const { data: articles, error: articlesError } = await supabase
+        .from("articles")
+        .select("*")
+        .eq("website_id", rule.website_id)
+        .ilike("title", `%${rule.keyword}%`)
+        .order("created_at", { ascending: false })
+        .limit(1);
 
-    if (articles && articles.length > 0) {
-      const lastArticle = articles[0];
-      await this.sendEmail(
-        rule.notify_email,
-        `Keyword "${rule.keyword}" Detected`,
-        `New article containing "${rule.keyword}" found: ${lastArticle.title}`
-      );
+      if (articlesError) {
+        console.error("Error fetching articles:", articlesError);
+        throw articlesError;
+      }
 
-      await supabase
-        .from("monitoring_rules")
-        .update({ last_triggered: new Date().toISOString() })
-        .eq("id", rule.id);
+      if (articles && articles.length > 0) {
+        const lastArticle = articles[0];
+        await this.sendEmail(
+          rule.notify_email,
+          `Keyword "${rule.keyword}" Detected`,
+          `New article containing "${rule.keyword}" found: ${lastArticle.title}`
+        );
+
+        const { error: updateError } = await supabase
+          .from("monitoring_rules")
+          .update({ last_triggered: new Date().toISOString() })
+          .eq("id", rule.id);
+
+        if (updateError) {
+          console.error("Error updating rule last_triggered:", updateError);
+          throw updateError;
+        }
+      }
+    } catch (error) {
+      console.error("Error in checkKeywordRule:", error);
+      throw error;
     }
   }
 
