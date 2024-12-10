@@ -34,6 +34,88 @@ export class DynamicScraper {
     ".item",
   ];
 
+  private scrapingLocks: Map<
+    string,
+    { timestamp: number; promise: Promise<any>; error?: Error }
+  > = new Map();
+  private readonly LOCK_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+  private cleanupInterval: NodeJS.Timeout;
+
+  constructor() {
+    // Start periodic lock cleanup
+    this.cleanupInterval = setInterval(() => {
+      this.cleanupExpiredLocks();
+    }, this.LOCK_TIMEOUT);
+  }
+
+  // Clean up resources when service is destroyed
+  public destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+  }
+
+  private cleanupExpiredLocks(): void {
+    const now = Date.now();
+    // Convert to array to avoid TypeScript iteration issues
+    Array.from(this.scrapingLocks.entries()).forEach(([url, lock]) => {
+      if (now - lock.timestamp > this.LOCK_TIMEOUT) {
+        console.log(`Cleaning up expired lock for ${url}`);
+        this.scrapingLocks.delete(url);
+      }
+    });
+  }
+
+  private async acquireLock(url: string): Promise<boolean> {
+    const now = Date.now();
+    const existingLock = this.scrapingLocks.get(url);
+
+    if (existingLock) {
+      // If lock is older than timeout, remove it
+      if (now - existingLock.timestamp > this.LOCK_TIMEOUT) {
+        console.log(`Lock expired for ${url}, removing`);
+        this.scrapingLocks.delete(url);
+        return true;
+      }
+
+      console.log(`Scraping already in progress for ${url}`);
+
+      try {
+        await existingLock.promise;
+        // If we get here, the previous scrape succeeded
+        console.log(`Reusing successful scrape results for ${url}`);
+        return false;
+      } catch (error) {
+        // If the previous scrape failed, we should retry
+        console.log(`Previous scrape of ${url} failed, will retry`);
+        this.scrapingLocks.delete(url);
+        return true;
+      }
+    }
+
+    return true;
+  }
+
+  private setLock(url: string, promise: Promise<any>): void {
+    const enhancedPromise = promise.catch((error) => {
+      // Store the error so we can check it later
+      const lock = this.scrapingLocks.get(url);
+      if (lock) {
+        lock.error = error;
+      }
+      throw error;
+    });
+
+    this.scrapingLocks.set(url, {
+      timestamp: Date.now(),
+      promise: enhancedPromise,
+    });
+  }
+
+  private removeLock(url: string): void {
+    this.scrapingLocks.delete(url);
+  }
+
   private async isStaticSite(page: Page): Promise<boolean> {
     // Enhanced SPA detection - check for common SPA characteristics
     const isSPA = await page.evaluate(() => {
@@ -146,135 +228,160 @@ export class DynamicScraper {
   }
 
   async scrape(url: string): Promise<{ title: string; articles: Article[] }> {
-    let browser: Browser | undefined;
+    // Normalize URL to prevent duplicate scraping of same content
+    const normalizedUrl = url.replace(/\/+$/, "");
 
-    try {
-      let executablePath: string;
-      let args: string[];
-
-      if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
-        // Running on Lambda/Vercel
-        executablePath = await chrome.executablePath();
-        args = chrome.args;
-      } else {
-        // Running locally - use system Chrome
-        executablePath =
-          process.platform === "win32"
-            ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-            : process.platform === "darwin"
-            ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-            : "/usr/bin/google-chrome";
-        args = [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-accelerated-2d-canvas",
-          "--no-first-run",
-          "--no-zygote",
-          "--disable-gpu",
-        ];
-      }
-
-      browser = await puppeteer.launch({
-        args,
-        executablePath,
-        headless: true,
-        defaultViewport: {
-          width: 1920,
-          height: 1080,
-        },
-      });
-
-      const page = await browser.newPage();
-      await page.setUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      );
-
-      console.log("Navigating to URL:", url);
-      await page.goto(url, {
-        waitUntil: "networkidle0",
-        timeout: 30000,
-      });
-
-      // Wait for any content to load
-      await page.waitForSelector(
-        'article, [class*="article"], [class*="post"], h1, h2, h3',
-        { timeout: 30000 }
-      );
-
-      const title = await page.title();
-      console.log("Page title:", title);
-
-      const isStatic = await this.isStaticSite(page);
-
-      if (isStatic) {
-        const articles = await this.extractArticles(page);
-        console.log(`Found ${articles.length} articles on static site`);
-        return { title, articles };
-      }
-
-      let articles = await this.extractArticles(page);
+    if (!(await this.acquireLock(normalizedUrl))) {
       console.log(
-        `Initially found ${articles.length} articles on dynamic site`
+        `Reusing results from in-progress scrape of ${normalizedUrl}`
       );
+      const lock = this.scrapingLocks.get(normalizedUrl);
+      if (!lock) {
+        throw new Error("Lock disappeared unexpectedly");
+      }
+      return lock.promise;
+    }
 
-      let previousLength = articles.length;
-      let noNewContentCount = 0;
-      const maxScrollAttempts = 5;
+    let browser: Browser | undefined;
+    const scrapePromise = (async () => {
+      try {
+        let executablePath: string;
+        let args: string[];
 
-      for (let i = 0; i < maxScrollAttempts; i++) {
-        console.log(`Scroll attempt ${i + 1}/${maxScrollAttempts}`);
+        if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
+          // Running on Lambda/Vercel
+          executablePath = await chrome.executablePath();
+          args = chrome.args;
+        } else {
+          // Running locally - use system Chrome
+          executablePath =
+            process.platform === "win32"
+              ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+              : process.platform === "darwin"
+              ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+              : "/usr/bin/google-chrome";
+          args = [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
+            "--disable-gpu",
+          ];
+        }
 
-        await page.evaluate(() => {
-          window.scrollTo(0, document.body.scrollHeight);
+        browser = await puppeteer.launch({
+          args,
+          executablePath,
+          headless: true,
+          defaultViewport: {
+            width: 1920,
+            height: 1080,
+          },
         });
 
-        await page.evaluate(
-          () => new Promise((resolve) => setTimeout(resolve, 2000))
+        const page = await browser.newPage();
+        await page.setUserAgent(
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         );
 
-        try {
-          await page.waitForFunction(
-            (prevCount: number) => {
-              const elements = document.querySelectorAll(
-                'article, [class*="article"], [class*="post"], [role="article"]'
-              );
-              return elements.length > prevCount;
-            },
-            { timeout: 3000 },
-            previousLength
+        console.log("Navigating to URL:", normalizedUrl);
+        await page.goto(normalizedUrl, {
+          waitUntil: "networkidle0",
+          timeout: 30000,
+        });
+
+        // Wait for any content to load
+        await page.waitForSelector(
+          'article, [class*="article"], [class*="post"], h1, h2, h3',
+          { timeout: 30000 }
+        );
+
+        const title = await page.title();
+        console.log("Page title:", title);
+
+        const isStatic = await this.isStaticSite(page);
+
+        if (isStatic) {
+          const articles = await this.extractArticles(page);
+          console.log(`Found ${articles.length} articles on static site`);
+          return { title, articles };
+        }
+
+        let articles = await this.extractArticles(page);
+        console.log(
+          `Initially found ${articles.length} articles on dynamic site`
+        );
+
+        let previousLength = articles.length;
+        let noNewContentCount = 0;
+        const maxScrollAttempts = 5;
+
+        for (let i = 0; i < maxScrollAttempts; i++) {
+          console.log(`Scroll attempt ${i + 1}/${maxScrollAttempts}`);
+
+          await page.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight);
+          });
+
+          await page.evaluate(
+            () => new Promise((resolve) => setTimeout(resolve, 2000))
           );
-        } catch (e) {
-          // No new content loaded
-        }
 
-        articles = await this.extractArticles(page);
-        console.log(`Found ${articles.length} articles after scroll ${i + 1}`);
-
-        if (articles.length === previousLength) {
-          noNewContentCount++;
-          if (noNewContentCount >= 2) {
-            console.log(
-              "No new content found after multiple scrolls, stopping"
+          try {
+            await page.waitForFunction(
+              (prevCount: number) => {
+                const elements = document.querySelectorAll(
+                  'article, [class*="article"], [class*="post"], [role="article"]'
+                );
+                return elements.length > prevCount;
+              },
+              { timeout: 3000 },
+              previousLength
             );
-            break;
+          } catch (e) {
+            // No new content loaded
           }
-        } else {
-          noNewContentCount = 0;
-          previousLength = articles.length;
-        }
-      }
 
-      console.log(`Final article count: ${articles.length}`);
-      return { title, articles };
-    } catch (error) {
-      console.error("Scraping error:", error);
-      throw error;
-    } finally {
-      if (browser) {
-        await browser.close();
+          articles = await this.extractArticles(page);
+          console.log(
+            `Found ${articles.length} articles after scroll ${i + 1}`
+          );
+
+          if (articles.length === previousLength) {
+            noNewContentCount++;
+            if (noNewContentCount >= 2) {
+              console.log(
+                "No new content found after multiple scrolls, stopping"
+              );
+              break;
+            }
+          } else {
+            noNewContentCount = 0;
+            previousLength = articles.length;
+          }
+        }
+
+        console.log(`Final article count: ${articles.length}`);
+        return { title, articles };
+      } catch (error) {
+        console.error("Scraping error:", error);
+        throw error;
+      } finally {
+        if (browser) {
+          try {
+            await browser.close();
+          } catch (error) {
+            console.error("Error closing browser:", error);
+          }
+        }
+        this.removeLock(normalizedUrl);
       }
-    }
+    })();
+
+    this.setLock(normalizedUrl, scrapePromise);
+    return scrapePromise;
   }
 
   private async extractArticles(page: Page): Promise<Article[]> {

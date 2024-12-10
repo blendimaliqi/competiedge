@@ -34,6 +34,9 @@ function normalizeUrl(url: string): string {
 
 export class MonitoringService {
   private resend: Resend;
+  private notificationCache: Map<string, number> = new Map();
+  private NOTIFICATION_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+  private cleanupInterval: NodeJS.Timeout;
 
   constructor() {
     console.log(
@@ -41,6 +44,64 @@ export class MonitoringService {
       process.env.RESEND_API_KEY?.substring(0, 5) + "..."
     );
     this.resend = new Resend(process.env.RESEND_API_KEY);
+
+    // Start periodic cache cleanup
+    this.cleanupInterval = setInterval(() => {
+      this.cleanupNotificationCache();
+    }, this.NOTIFICATION_COOLDOWN_MS);
+  }
+
+  private cleanupNotificationCache(): void {
+    const now = Date.now();
+    // Convert Map entries to array to avoid TypeScript iteration issues
+    Array.from(this.notificationCache.entries()).forEach(([key, timestamp]) => {
+      if (now - timestamp > this.NOTIFICATION_COOLDOWN_MS) {
+        this.notificationCache.delete(key);
+      }
+    });
+  }
+
+  // Clean up interval on service destruction
+  public destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+  }
+
+  private getCacheKey(
+    email: string,
+    websiteUrl: string,
+    links: string[]
+  ): string {
+    // Normalize URLs in the cache key to prevent duplicates due to trailing slashes, etc.
+    const normalizedUrl = websiteUrl.replace(/\/+$/, "");
+    const normalizedLinks = links
+      .map((link) => link.replace(/\/+$/, ""))
+      .sort();
+    return `${email}:${normalizedUrl}:${normalizedLinks.join(",")}`;
+  }
+
+  private canSendNotification(
+    email: string,
+    websiteUrl: string,
+    links: string[]
+  ): boolean {
+    const cacheKey = this.getCacheKey(email, websiteUrl, links);
+    const lastSentTime = this.notificationCache.get(cacheKey);
+
+    if (!lastSentTime) return true;
+
+    const timeSinceLastNotification = Date.now() - lastSentTime;
+    return timeSinceLastNotification > this.NOTIFICATION_COOLDOWN_MS;
+  }
+
+  private updateNotificationCache(
+    email: string,
+    websiteUrl: string,
+    links: string[]
+  ): void {
+    const cacheKey = this.getCacheKey(email, websiteUrl, links);
+    this.notificationCache.set(cacheKey, Date.now());
   }
 
   private async sendEmail(to: string, subject: string, content: string) {
@@ -87,6 +148,11 @@ export class MonitoringService {
       newLinksCount: newLinks.length,
       resendApiKey: process.env.RESEND_API_KEY ? "Set" : "Not set",
     });
+
+    if (!this.canSendNotification(to, websiteUrl, newLinks)) {
+      console.log("Skipping duplicate notification within cooldown period");
+      return;
+    }
 
     if (!process.env.RESEND_API_KEY) {
       console.error(
@@ -171,6 +237,10 @@ export class MonitoringService {
         `
       );
       console.log("Email notification sent successfully:", result);
+
+      // Update cache after successful send
+      this.updateNotificationCache(to, websiteUrl, newLinks);
+
       return result;
     } catch (error) {
       console.error("Failed to send email notification:", error);
