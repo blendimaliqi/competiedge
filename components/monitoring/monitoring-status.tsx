@@ -11,7 +11,7 @@ export function MonitoringStatus() {
   const queryClient = useQueryClient();
 
   // Query monitoring status
-  const { data: status, isLoading } = useQuery({
+  const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ["monitoringStatus"],
     queryFn: async () => {
       const response = await fetch("/api/monitoring/status");
@@ -20,8 +20,29 @@ export function MonitoringStatus() {
       }
       return response.json();
     },
+    staleTime: 0,
+    gcTime: 0,
     refetchInterval: 30000, // Refresh every 30 seconds
   });
+
+  // Query active rules
+  const { data: activeRules, isLoading: rulesLoading } = useQuery({
+    queryKey: ["activeRules"],
+    queryFn: async () => {
+      const response = await fetch("/api/monitoring/rules/active");
+      if (!response.ok) {
+        throw new Error("Failed to fetch active rules");
+      }
+      return response.json();
+    },
+    staleTime: 0,
+    gcTime: 0,
+    refetchInterval: 30000,
+  });
+
+  // Determine if monitoring is actually active
+  const isMonitoringActive = status?.enabled && activeRules?.length > 0;
+  const isLoading = statusLoading || rulesLoading;
 
   // Mutation to update monitoring status
   const updateStatus = useMutation({
@@ -46,6 +67,7 @@ export function MonitoringStatus() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["monitoringStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["activeRules"] });
     },
     onError: (err) => {
       setError(err instanceof Error ? err.message : "Failed to update status");
@@ -65,19 +87,20 @@ export function MonitoringStatus() {
 
       <div className="flex items-center gap-2">
         <span className="text-sm text-muted-foreground">
-          Monitoring is {status?.enabled ? "active" : "paused"}
+          Monitoring is {isMonitoringActive ? "active" : "paused"}
+          {activeRules?.length > 0 && ` (${activeRules.length} active rules)`}
         </span>
         <Button
           variant="outline"
           size="sm"
           onClick={() =>
-            updateStatus.mutate(status?.enabled ? "pause" : "resume")
+            updateStatus.mutate(isMonitoringActive ? "pause" : "resume")
           }
           disabled={updateStatus.isPending || isLoading}
         >
           {updateStatus.isPending ? (
             "Updating..."
-          ) : status?.enabled ? (
+          ) : isMonitoringActive ? (
             <>
               <Pause className="h-4 w-4 mr-2" />
               Pause Monitoring

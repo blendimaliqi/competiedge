@@ -30,16 +30,22 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
   const { data: rules, refetch } = useQuery({
     queryKey: ["monitoringRules", websiteId],
     queryFn: async () => {
+      console.log("Fetching monitoring rules for website:", websiteId);
       const response = await fetch(
         `/api/monitoring/rules?websiteId=${websiteId}`
       );
       if (!response.ok) {
-        throw new Error("Failed to fetch monitoring rules");
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to fetch monitoring rules");
       }
       const data = await response.json();
       console.log("Fetched rules:", data);
       return data;
     },
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
   });
 
   // Get the active rule's email if it exists
@@ -153,7 +159,14 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
       return response.json();
     },
     onSuccess: async () => {
-      console.log("Monitoring stopped, refreshing rules...");
+      console.log("Monitoring stopped, refreshing data...");
+      // Invalidate all relevant queries
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["monitoringRules"] }),
+        queryClient.invalidateQueries({ queryKey: ["monitoringStatus"] }),
+        queryClient.invalidateQueries({ queryKey: ["activeRules"] }),
+      ]);
+      // Force refetch the rules
       await refetch();
       resetForm();
       setError("Monitoring stopped successfully");
