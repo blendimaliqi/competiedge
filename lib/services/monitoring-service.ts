@@ -71,8 +71,35 @@ export class MonitoringService {
     }
 
     const formattedLinks = newLinks
-      .map((link) => `• <a href="${link}">${link}</a>`)
-      .join("<br>");
+      .map((link) => {
+        const titleMatch = link.match(/\/([^\/]+)$/);
+        const title = titleMatch
+          ? titleMatch[1]
+              .replace(/-/g, " ")
+              .replace(/[0-9a-f]{32}$/, "")
+              .trim()
+          : "New Article";
+        const currentTime = new Date().toLocaleString("en-GB", {
+          hour: "2-digit",
+          minute: "2-digit",
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        });
+
+        return `
+          <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #eee; border-radius: 5px;">
+            <h3 style="margin: 0 0 10px 0;">${title}</h3>
+            <p style="margin: 5px 0; color: #666;">First detected: ${currentTime}</p>
+            <p style="margin: 5px 0; color: #666;">Published: ${currentTime}</p>
+            <p style="margin: 5px 0; color: #666;">Location: ${link}</p>
+            <p style="margin: 10px 0;">
+              <a href="${link}" style="background: #0070f3; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px;">Visit</a>
+            </p>
+          </div>
+        `;
+      })
+      .join("");
 
     console.log("Attempting to send email notification...");
 
@@ -83,8 +110,13 @@ export class MonitoringService {
           newLinks.length === 1 ? "" : "s"
         } Found on ${websiteUrl}`,
         `
-          New links have been detected on ${websiteUrl}:<br><br>
-          ${formattedLinks}
+          <div style="font-family: Arial, sans-serif;">
+            <h2 style="color: #333;">New links have been detected on ${websiteUrl}:</h2>
+            ${formattedLinks}
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+              <p style="color: #666; font-size: 12px;">Register Now - Get up to 100 USDT in trading fee rebate (for verified users)</p>
+            </div>
+          </div>
         `
       );
       console.log("Email notification sent successfully:", result);
