@@ -147,18 +147,18 @@ export class MonitoringService {
     try {
       const result = await this.sendEmail(
         to,
-        `${newLinks.length} New Article${
+        `${websiteUrl}: ${newLinks.length} New Article${
           newLinks.length === 1 ? "" : "s"
-        } Found on ${websiteUrl}`,
+        } Found`,
         `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f9f9f9;">
             <h2 style="color: #333; border-bottom: 2px solid #0070f3; padding-bottom: 10px; margin-top: 0;">
-              New Content Detected
+              New Content on ${websiteUrl}
             </h2>
             <p style="color: #666; margin: 15px 0;">
               We've detected ${newLinks.length} new article${
           newLinks.length === 1 ? "" : "s"
-        } on ${websiteUrl}:
+        }:
             </p>
             ${formattedLinks}
             <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
