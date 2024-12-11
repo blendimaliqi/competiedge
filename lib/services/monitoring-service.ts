@@ -625,42 +625,39 @@ export class MonitoringService {
       }
 
       // Use a transaction to update all rules atomically
-      const { error: transactionError } = await supabase.rpc(
-        "disable_monitoring_rules",
-        {
+      const { data: updateResult, error: transactionError } =
+        await supabase.rpc("disable_monitoring_rules", {
           p_website_id: websiteId,
           p_user_id: userId,
           p_rule_ids: existingRules.map((rule) => rule.id),
-        }
-      );
+        });
 
       if (transactionError) {
         console.error("Error in transaction:", transactionError);
         throw new Error(`Failed to disable rules: ${transactionError.message}`);
       }
 
-      // Wait a moment for the database to process the updates
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      console.log("Update result:", updateResult);
 
-      // Verify all rules were disabled
-      const { data: verifyRules, error: verifyError } = await supabase
-        .from("monitoring_rules")
-        .select("*")
-        .eq("website_id", websiteId)
-        .eq("created_by", userId)
-        .eq("enabled", true);
-
-      if (verifyError) {
-        console.error("Error verifying rules:", verifyError);
-        throw new Error(`Failed to verify rules: ${verifyError.message}`);
+      if (
+        !updateResult ||
+        updateResult.length === 0 ||
+        updateResult[0].rules_updated === 0
+      ) {
+        console.error("No rules were updated");
+        throw new Error("Failed to disable rules: No rules were updated");
       }
 
-      if (verifyRules && verifyRules.length > 0) {
-        const stillEnabled = verifyRules.map((r) => r.id);
-        console.warn("Some rules still enabled:", stillEnabled);
-        throw new Error(`Failed to disable rules: ${stillEnabled.join(", ")}`);
+      if (updateResult[0].rules_remaining > 0) {
+        console.error(
+          `${updateResult[0].rules_remaining} rules are still enabled`
+        );
+        throw new Error(
+          `Failed to disable rules: ${updateResult[0].rules_remaining} rules are still enabled`
+        );
       }
 
+      // No need to verify since the stored procedure already confirmed the update
       // Check if there are any remaining active rules for any website
       const { data: activeRules, error: activeError } = await supabase
         .from("monitoring_rules")
