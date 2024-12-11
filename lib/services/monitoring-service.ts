@@ -624,43 +624,56 @@ export class MonitoringService {
         return null;
       }
 
-      // Use a transaction to update all rules atomically
-      const { data: updateResult, error: transactionError } =
-        await supabase.rpc("disable_monitoring_rules", {
-          p_website_id: websiteId,
-          p_user_id: userId,
-          p_rule_ids: existingRules.map((rule) => rule.id),
-        });
-
-      if (transactionError) {
-        console.error("Error in transaction:", transactionError);
-        throw new Error(`Failed to disable rules: ${transactionError.message}`);
-      }
-
-      console.log("Update result:", updateResult);
-
-      if (!updateResult || updateResult.length === 0) {
-        console.error("No response from update operation");
-        throw new Error("Failed to disable rules: No response from database");
-      }
-
-      console.log(
-        `Updated ${updateResult[0].rules_updated} rules, ${updateResult[0].rules_remaining} remaining`
+      // Update all rules in parallel
+      const updatePromises = existingRules.map((rule) =>
+        supabase
+          .from("monitoring_rules")
+          .update({
+            enabled: false,
+            last_triggered: new Date().toISOString(),
+          })
+          .eq("id", rule.id)
+          .eq("website_id", websiteId)
+          .eq("created_by", userId)
       );
 
-      // Even if no rules were updated, we'll consider it a success if there are no remaining enabled rules
-      if (updateResult[0].rules_remaining === 0) {
-        console.log("All rules are now disabled");
-      } else {
-        console.warn(
-          `${updateResult[0].rules_remaining} rules are still enabled`
-        );
+      const results = await Promise.all(updatePromises);
+
+      // Check for any errors
+      const errors = results
+        .map((result, index) =>
+          result.error
+            ? { ruleId: existingRules[index].id, error: result.error }
+            : null
+        )
+        .filter(Boolean);
+
+      if (errors.length > 0) {
+        console.error("Errors updating rules:", errors);
         throw new Error(
-          `Failed to disable rules: ${updateResult[0].rules_remaining} rules are still enabled`
+          `Failed to disable rules: ${errors.map((e) => e?.ruleId).join(", ")}`
         );
       }
 
-      // No need to verify since the stored procedure already confirmed the update
+      // Verify all rules were disabled
+      const { data: verifyRules, error: verifyError } = await supabase
+        .from("monitoring_rules")
+        .select("*")
+        .eq("website_id", websiteId)
+        .eq("created_by", userId)
+        .eq("enabled", true);
+
+      if (verifyError) {
+        console.error("Error verifying rules:", verifyError);
+        throw new Error(`Failed to verify rules: ${verifyError.message}`);
+      }
+
+      if (verifyRules && verifyRules.length > 0) {
+        const stillEnabled = verifyRules.map((r) => r.id);
+        console.warn("Some rules still enabled:", stillEnabled);
+        throw new Error(`Failed to disable rules: ${stillEnabled.join(", ")}`);
+      }
+
       // Check if there are any remaining active rules for any website
       const { data: activeRules, error: activeError } = await supabase
         .from("monitoring_rules")
