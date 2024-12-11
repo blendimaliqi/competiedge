@@ -614,7 +614,7 @@ export class MonitoringService {
 
       if (fetchError) {
         console.error("Error fetching rules:", fetchError);
-        throw fetchError;
+        throw new Error(`Failed to fetch rules: ${fetchError.message}`);
       }
 
       console.log("Found rules to disable:", existingRules);
@@ -624,51 +624,45 @@ export class MonitoringService {
         return null;
       }
 
-      // Try to use the stored procedure first
-      try {
-        const { data, error } = await supabase.rpc("disable_monitoring_rules", {
-          p_website_id: websiteId,
-          p_user_id: userId,
-          p_rule_ids: existingRules.map((rule) => rule.id),
-        });
+      // Disable rules one by one to ensure we don't hit any constraints
+      const results = [];
+      const errors = [];
 
-        if (!error) {
-          console.log("Successfully used stored procedure to disable rules");
-          return data;
+      for (const rule of existingRules) {
+        try {
+          console.log(`Attempting to disable rule: ${rule.id}`);
+          const { data, error } = await supabase
+            .from("monitoring_rules")
+            .update({
+              enabled: false,
+              last_triggered: new Date().toISOString(),
+            })
+            .eq("id", rule.id)
+            .eq("created_by", userId)
+            .select()
+            .single();
+
+          if (error) {
+            console.error(`Error disabling rule ${rule.id}:`, error);
+            errors.push({ ruleId: rule.id, error });
+          } else {
+            console.log(`Successfully disabled rule ${rule.id}`);
+            results.push(data);
+          }
+        } catch (error) {
+          console.error(`Error processing rule ${rule.id}:`, error);
+          errors.push({ ruleId: rule.id, error });
         }
+      }
 
-        console.warn(
-          "Stored procedure failed, falling back to direct update:",
-          error
-        );
-      } catch (procError) {
-        console.warn(
-          "Stored procedure not available, falling back to direct update:",
-          procError
+      // If we had any errors, throw them
+      if (errors.length > 0) {
+        throw new Error(
+          `Failed to disable some rules: ${JSON.stringify(errors)}`
         );
       }
 
-      // Fall back to direct update if stored procedure fails or doesn't exist
-      const { data, error } = await supabase
-        .from("monitoring_rules")
-        .update({
-          enabled: false,
-          last_triggered: new Date().toISOString(),
-        })
-        .eq("website_id", websiteId)
-        .eq("created_by", userId)
-        .in(
-          "id",
-          existingRules.map((rule) => rule.id)
-        )
-        .select();
-
-      if (error) {
-        console.error("Error disabling rules:", error);
-        throw error;
-      }
-
-      // Verify the update was successful
+      // Verify all rules were disabled
       const { data: verifyRules, error: verifyError } = await supabase
         .from("monitoring_rules")
         .select("*")
@@ -678,12 +672,13 @@ export class MonitoringService {
 
       if (verifyError) {
         console.error("Error verifying rules:", verifyError);
-        throw verifyError;
+        throw new Error(`Failed to verify rules: ${verifyError.message}`);
       }
 
       if (verifyRules && verifyRules.length > 0) {
-        console.warn("Some rules still enabled:", verifyRules);
-        throw new Error("Failed to disable all monitoring rules");
+        const stillEnabled = verifyRules.map((r) => r.id);
+        console.warn("Some rules still enabled:", stillEnabled);
+        throw new Error(`Failed to disable rules: ${stillEnabled.join(", ")}`);
       }
 
       // Check if there are any remaining active rules for any website
@@ -698,11 +693,16 @@ export class MonitoringService {
         console.error("Error checking active rules:", activeError);
       } else if (!activeRules || activeRules.length === 0) {
         // If no active rules remain, pause global monitoring
-        await this.pauseMonitoring(userId);
+        try {
+          await this.pauseMonitoring(userId);
+        } catch (error) {
+          console.error("Error pausing global monitoring:", error);
+          // Don't throw here as the main operation succeeded
+        }
       }
 
-      console.log("Successfully disabled all monitoring rules");
-      return data;
+      console.log("Successfully disabled all monitoring rules:", results);
+      return results;
     } catch (error) {
       console.error("Failed to stop monitoring:", error);
       throw error;
