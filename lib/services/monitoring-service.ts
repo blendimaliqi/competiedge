@@ -639,17 +639,20 @@ export class MonitoringService {
 
       console.log("Update result:", updateResult);
 
-      if (
-        !updateResult ||
-        updateResult.length === 0 ||
-        updateResult[0].rules_updated === 0
-      ) {
-        console.error("No rules were updated");
-        throw new Error("Failed to disable rules: No rules were updated");
+      if (!updateResult || updateResult.length === 0) {
+        console.error("No response from update operation");
+        throw new Error("Failed to disable rules: No response from database");
       }
 
-      if (updateResult[0].rules_remaining > 0) {
-        console.error(
+      console.log(
+        `Updated ${updateResult[0].rules_updated} rules, ${updateResult[0].rules_remaining} remaining`
+      );
+
+      // Even if no rules were updated, we'll consider it a success if there are no remaining enabled rules
+      if (updateResult[0].rules_remaining === 0) {
+        console.log("All rules are now disabled");
+      } else {
+        console.warn(
           `${updateResult[0].rules_remaining} rules are still enabled`
         );
         throw new Error(
