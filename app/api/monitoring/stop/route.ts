@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     if (sessionError) {
       console.error("Session error:", sessionError);
       return NextResponse.json(
-        { error: "Authentication error" },
+        { error: "Authentication error", details: sessionError },
         { status: 401 }
       );
     }
@@ -42,13 +42,28 @@ export async function POST(request: Request) {
       );
     }
 
+    console.log(
+      "Checking rules for website:",
+      websiteId,
+      "user:",
+      session.user.id
+    );
+
     // Verify the user owns this monitoring rule
-    const { data: rules } = await supabase
+    const { data: rules, error: rulesError } = await supabase
       .from("monitoring_rules")
       .select("id")
       .eq("website_id", websiteId)
       .eq("created_by", session.user.id)
       .eq("enabled", true);
+
+    if (rulesError) {
+      console.error("Error checking rules:", rulesError);
+      return NextResponse.json(
+        { error: "Failed to check monitoring rules", details: rulesError },
+        { status: 500 }
+      );
+    }
 
     if (!rules || rules.length === 0) {
       return NextResponse.json(
@@ -57,15 +72,31 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await monitoringService.stopMonitoring(
-      websiteId,
-      session.user.id
-    );
-    return NextResponse.json({ success: true, data: result });
-  } catch (error) {
+    console.log("Found rules to disable:", rules);
+
+    try {
+      const result = await monitoringService.stopMonitoring(
+        websiteId,
+        session.user.id
+      );
+      return NextResponse.json({ success: true, data: result });
+    } catch (stopError: any) {
+      console.error("Error in stopMonitoring:", stopError);
+      return NextResponse.json(
+        {
+          error: "Failed to stop monitoring",
+          details: stopError.message || String(stopError),
+        },
+        { status: 500 }
+      );
+    }
+  } catch (error: any) {
     console.error("Failed to stop monitoring:", error);
     return NextResponse.json(
-      { error: "Failed to stop monitoring" },
+      {
+        error: "Failed to stop monitoring",
+        details: error.message || String(error),
+      },
       { status: 500 }
     );
   }

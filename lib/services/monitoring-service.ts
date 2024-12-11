@@ -624,12 +624,44 @@ export class MonitoringService {
         return null;
       }
 
-      // Update all rules to disabled state in a transaction
-      const { data, error } = await supabase.rpc("disable_monitoring_rules", {
-        p_website_id: websiteId,
-        p_user_id: userId,
-        p_rule_ids: existingRules.map((rule) => rule.id),
-      });
+      // Try to use the stored procedure first
+      try {
+        const { data, error } = await supabase.rpc("disable_monitoring_rules", {
+          p_website_id: websiteId,
+          p_user_id: userId,
+          p_rule_ids: existingRules.map((rule) => rule.id),
+        });
+
+        if (!error) {
+          console.log("Successfully used stored procedure to disable rules");
+          return data;
+        }
+
+        console.warn(
+          "Stored procedure failed, falling back to direct update:",
+          error
+        );
+      } catch (procError) {
+        console.warn(
+          "Stored procedure not available, falling back to direct update:",
+          procError
+        );
+      }
+
+      // Fall back to direct update if stored procedure fails or doesn't exist
+      const { data, error } = await supabase
+        .from("monitoring_rules")
+        .update({
+          enabled: false,
+          last_triggered: new Date().toISOString(),
+        })
+        .eq("website_id", websiteId)
+        .eq("created_by", userId)
+        .in(
+          "id",
+          existingRules.map((rule) => rule.id)
+        )
+        .select();
 
       if (error) {
         console.error("Error disabling rules:", error);
@@ -654,7 +686,6 @@ export class MonitoringService {
         throw new Error("Failed to disable all monitoring rules");
       }
 
-      // If we get here, all rules were successfully disabled
       // Check if there are any remaining active rules for any website
       const { data: activeRules, error: activeError } = await supabase
         .from("monitoring_rules")
