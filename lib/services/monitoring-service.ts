@@ -638,16 +638,14 @@ export class MonitoringService {
               last_triggered: new Date().toISOString(),
             })
             .eq("id", rule.id)
-            .eq("created_by", userId)
-            .select()
-            .single();
+            .eq("created_by", userId);
 
           if (error) {
             console.error(`Error disabling rule ${rule.id}:`, error);
             errors.push({ ruleId: rule.id, error });
           } else {
             console.log(`Successfully disabled rule ${rule.id}`);
-            results.push(data);
+            results.push({ id: rule.id, enabled: false });
           }
         } catch (error) {
           console.error(`Error processing rule ${rule.id}:`, error);
