@@ -45,7 +45,8 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
     staleTime: 0,
     gcTime: 0,
     refetchOnMount: "always",
-    refetchOnWindowFocus: "always",
+    refetchOnWindowFocus: true,
+    refetchInterval: 10000,
   });
 
   // Get the active rule's email if it exists
@@ -156,7 +157,9 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
         throw new Error(errorData.error || "Failed to stop monitoring");
       }
 
-      return response.json();
+      const data = await response.json();
+      console.log("Stop monitoring response:", data);
+      return data;
     },
     onSuccess: async () => {
       console.log("Monitoring stopped, refreshing data...");
@@ -165,13 +168,28 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
         queryClient.invalidateQueries({ queryKey: ["monitoringRules"] }),
         queryClient.invalidateQueries({ queryKey: ["monitoringStatus"] }),
         queryClient.invalidateQueries({ queryKey: ["activeRules"] }),
+        queryClient.invalidateQueries({ queryKey: ["websites"] }),
       ]);
-      // Force refetch the rules
+
+      // Force immediate refetch
       await refetch();
-      resetForm();
-      setError("Monitoring stopped successfully");
+
+      // Double-check the rules after a short delay
+      setTimeout(async () => {
+        const result = await refetch();
+        if (result.data?.some((r: MonitoringRule) => r.enabled)) {
+          console.warn("Some rules are still enabled after stop operation");
+          setError(
+            "Warning: Some monitoring rules may still be active. Please try again or contact support if the issue persists."
+          );
+        } else {
+          resetForm();
+          setError("Monitoring stopped successfully");
+        }
+      }, 2000);
     },
     onError: (err) => {
+      console.error("Failed to stop monitoring:", err);
       setError(
         err instanceof Error ? err.message : "Failed to stop monitoring"
       );

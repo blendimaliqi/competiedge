@@ -609,7 +609,8 @@ export class MonitoringService {
         .from("monitoring_rules")
         .select("*")
         .eq("website_id", websiteId)
-        .eq("created_by", userId);
+        .eq("created_by", userId)
+        .eq("enabled", true);
 
       if (fetchError) {
         console.error("Error fetching rules:", fetchError);
@@ -623,41 +624,19 @@ export class MonitoringService {
         return null;
       }
 
-      // Update all rules to disabled state
-      const { data, error } = await supabase
-        .from("monitoring_rules")
-        .update({
-          enabled: false,
-          last_triggered: new Date().toISOString(),
-        })
-        .eq("website_id", websiteId)
-        .eq("created_by", userId)
-        .in(
-          "id",
-          existingRules.map((rule) => rule.id)
-        )
-        .select();
+      // Update all rules to disabled state in a transaction
+      const { data, error } = await supabase.rpc("disable_monitoring_rules", {
+        p_website_id: websiteId,
+        p_user_id: userId,
+        p_rule_ids: existingRules.map((rule) => rule.id),
+      });
 
       if (error) {
         console.error("Error disabling rules:", error);
         throw error;
       }
 
-      // Check if there are any remaining active rules for any website
-      const { data: activeRules, error: activeError } = await supabase
-        .from("monitoring_rules")
-        .select("id")
-        .eq("enabled", true)
-        .limit(1);
-
-      if (activeError) {
-        console.error("Error checking active rules:", activeError);
-      } else if (!activeRules || activeRules.length === 0) {
-        // If no active rules remain, pause global monitoring
-        await this.pauseMonitoring(userId);
-      }
-
-      // Double verify that all rules for this website are disabled
+      // Verify the update was successful
       const { data: verifyRules, error: verifyError } = await supabase
         .from("monitoring_rules")
         .select("*")
@@ -667,21 +646,31 @@ export class MonitoringService {
 
       if (verifyError) {
         console.error("Error verifying rules:", verifyError);
-      } else if (verifyRules && verifyRules.length > 0) {
-        console.warn("Some rules still enabled:", verifyRules);
-        // Force disable any remaining enabled rules
-        await supabase
-          .from("monitoring_rules")
-          .update({ enabled: false })
-          .eq("website_id", websiteId)
-          .eq("created_by", userId)
-          .in(
-            "id",
-            verifyRules.map((rule) => rule.id)
-          );
+        throw verifyError;
       }
 
-      console.log("Successfully disabled all monitoring rules:", data);
+      if (verifyRules && verifyRules.length > 0) {
+        console.warn("Some rules still enabled:", verifyRules);
+        throw new Error("Failed to disable all monitoring rules");
+      }
+
+      // If we get here, all rules were successfully disabled
+      // Check if there are any remaining active rules for any website
+      const { data: activeRules, error: activeError } = await supabase
+        .from("monitoring_rules")
+        .select("id")
+        .eq("enabled", true)
+        .eq("created_by", userId)
+        .limit(1);
+
+      if (activeError) {
+        console.error("Error checking active rules:", activeError);
+      } else if (!activeRules || activeRules.length === 0) {
+        // If no active rules remain, pause global monitoring
+        await this.pauseMonitoring(userId);
+      }
+
+      console.log("Successfully disabled all monitoring rules");
       return data;
     } catch (error) {
       console.error("Failed to stop monitoring:", error);
