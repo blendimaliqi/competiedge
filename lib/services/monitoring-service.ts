@@ -624,41 +624,23 @@ export class MonitoringService {
         return null;
       }
 
-      // Disable rules one by one to ensure we don't hit any constraints
-      const results = [];
-      const errors = [];
-
-      for (const rule of existingRules) {
-        try {
-          console.log(`Attempting to disable rule: ${rule.id}`);
-          const { data, error } = await supabase
-            .from("monitoring_rules")
-            .update({
-              enabled: false,
-              last_triggered: new Date().toISOString(),
-            })
-            .eq("id", rule.id)
-            .eq("created_by", userId);
-
-          if (error) {
-            console.error(`Error disabling rule ${rule.id}:`, error);
-            errors.push({ ruleId: rule.id, error });
-          } else {
-            console.log(`Successfully disabled rule ${rule.id}`);
-            results.push({ id: rule.id, enabled: false });
-          }
-        } catch (error) {
-          console.error(`Error processing rule ${rule.id}:`, error);
-          errors.push({ ruleId: rule.id, error });
+      // Use a transaction to update all rules atomically
+      const { error: transactionError } = await supabase.rpc(
+        "disable_monitoring_rules",
+        {
+          p_website_id: websiteId,
+          p_user_id: userId,
+          p_rule_ids: existingRules.map((rule) => rule.id),
         }
+      );
+
+      if (transactionError) {
+        console.error("Error in transaction:", transactionError);
+        throw new Error(`Failed to disable rules: ${transactionError.message}`);
       }
 
-      // If we had any errors, throw them
-      if (errors.length > 0) {
-        throw new Error(
-          `Failed to disable some rules: ${JSON.stringify(errors)}`
-        );
-      }
+      // Wait a moment for the database to process the updates
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Verify all rules were disabled
       const { data: verifyRules, error: verifyError } = await supabase
@@ -699,8 +681,8 @@ export class MonitoringService {
         }
       }
 
-      console.log("Successfully disabled all monitoring rules:", results);
-      return results;
+      console.log("Successfully disabled all monitoring rules");
+      return existingRules.map((rule) => ({ id: rule.id, enabled: false }));
     } catch (error) {
       console.error("Failed to stop monitoring:", error);
       throw error;
