@@ -625,8 +625,13 @@ export class MonitoringService {
       }
 
       // Update all rules in parallel
-      const updatePromises = existingRules.map((rule) =>
-        supabase
+      console.log(
+        "Starting updates for rules:",
+        existingRules.map((r) => r.id)
+      );
+
+      const updatePromises = existingRules.map(async (rule) => {
+        const { data, error, status } = await supabase
           .from("monitoring_rules")
           .update({
             enabled: false,
@@ -635,25 +640,36 @@ export class MonitoringService {
           .eq("id", rule.id)
           .eq("website_id", websiteId)
           .eq("created_by", userId)
-      );
+          .select()
+          .single();
+
+        console.log(`Update result for rule ${rule.id}:`, {
+          data,
+          error,
+          status,
+        });
+
+        if (error) {
+          return { ruleId: rule.id, error, success: false };
+        }
+        return { ruleId: rule.id, data, success: true };
+      });
 
       const results = await Promise.all(updatePromises);
+      console.log("Update results:", results);
 
       // Check for any errors
-      const errors = results
-        .map((result, index) =>
-          result.error
-            ? { ruleId: existingRules[index].id, error: result.error }
-            : null
-        )
-        .filter(Boolean);
+      const errors = results.filter((result) => !result.success);
 
       if (errors.length > 0) {
         console.error("Errors updating rules:", errors);
         throw new Error(
-          `Failed to disable rules: ${errors.map((e) => e?.ruleId).join(", ")}`
+          `Failed to disable rules: ${errors.map((e) => e.ruleId).join(", ")}`
         );
       }
+
+      // Add a small delay before verification
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Verify all rules were disabled
       const { data: verifyRules, error: verifyError } = await supabase
