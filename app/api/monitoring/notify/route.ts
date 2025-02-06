@@ -14,48 +14,18 @@ export async function POST(request: Request) {
     const authHeader = request.headers.get("authorization");
     const serviceRoleKey = authHeader?.replace("Bearer ", "");
 
-    console.log("Notify endpoint called:", {
-      hasSecret: !!secret,
-      hasCronSecret: !!CRON_SECRET,
-      secretMatch: secret === CRON_SECRET,
-      hasServiceRoleKey: !!serviceRoleKey,
-    });
-
-    if (!CRON_SECRET) {
-      console.error("CRON_SECRET is not set in environment variables");
-      return NextResponse.json(
-        { error: "Server configuration error" },
-        { status: 500 }
-      );
-    }
-
-    if (secret !== CRON_SECRET) {
-      console.error("Secret mismatch:", {
-        providedSecret: secret?.substring(0, 5) + "...",
-        expectedSecret: CRON_SECRET.substring(0, 5) + "...",
-      });
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     if (
+      !CRON_SECRET ||
+      secret !== CRON_SECRET ||
       !serviceRoleKey ||
       serviceRoleKey !== process.env.SUPABASE_SERVICE_ROLE_KEY
     ) {
-      console.error("Invalid service role key");
-      return NextResponse.json(
-        { error: "Unauthorized - Invalid service role key" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const { websiteId, newLinks } = await request.json();
-    console.log("Processing notification request:", {
-      websiteId,
-      newLinksCount: newLinks?.length,
-    });
 
-    if (!websiteId || !newLinks) {
-      console.error("Missing required fields:", { websiteId, newLinks });
+    if (!websiteId || !newLinks?.length) {
       return NextResponse.json(
         { error: "Missing required fields" },
         { status: 400 }
@@ -65,92 +35,81 @@ export async function POST(request: Request) {
     // Use admin client for cron operations
     const client = supabaseAdmin || supabase;
 
-    // Get monitoring rules for this website
-    console.log("Fetching monitoring rules for website:", websiteId);
-    const { data: rules, error: rulesError } = await client
-      .from("monitoring_rules")
-      .select("*")
-      .eq("website_id", websiteId)
-      .eq("enabled", true)
-      .eq("type", "CONTENT_CHANGE");
-
-    if (rulesError) {
-      console.error("Error fetching monitoring rules:", rulesError);
-      return NextResponse.json(
-        { error: "Failed to fetch monitoring rules" },
-        { status: 500 }
-      );
-    }
-
-    console.log("Found monitoring rules:", {
-      count: rules?.length || 0,
-      rules: rules?.map((r: any) => ({ id: r.id, email: r.notify_email })),
-    });
-
-    if (!rules || rules.length === 0) {
-      console.log("No active monitoring rules found for website:", websiteId);
-      return NextResponse.json({ message: "No monitoring rules found" });
-    }
-
-    // Get the website URL for the email
-    console.log("Fetching website details for:", websiteId);
-    const { data: website, error: websiteError } = await client
+    // Get website URL first
+    const { data: website } = await client
       .from("websites")
       .select("url")
       .eq("id", websiteId)
       .single();
 
-    if (websiteError) {
-      console.error("Error fetching website:", websiteError);
-      return NextResponse.json(
-        { error: "Failed to fetch website details" },
-        { status: 500 }
-      );
-    }
-
-    console.log("Found website:", website);
-
-    if (!website) {
-      console.error("Website not found:", websiteId);
+    if (!website?.url) {
       return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
 
-    // Process each rule
-    const results = [];
-    for (const rule of rules) {
-      try {
-        console.log("Processing rule:", {
-          ruleId: rule.id,
-          email: rule.notify_email,
-        });
+    // Get only necessary fields and process in batches
+    const batchSize = 50;
+    let processedCount = 0;
+    let failedCount = 0;
+    let lastError = null;
 
-        await monitoringService.sendNotification(
-          rule.notify_email,
-          website.url,
-          newLinks
-        );
-        console.log("Notification sent successfully for rule:", rule.id);
+    // Stream rules in batches using range
+    for (let offset = 0; ; offset += batchSize) {
+      const {
+        data: rules,
+        error: rulesError,
+        count,
+      } = await client
+        .from("monitoring_rules")
+        .select("id, notify_email", { count: "exact" })
+        .eq("website_id", websiteId)
+        .eq("enabled", true)
+        .eq("type", "CONTENT_CHANGE")
+        .range(offset, offset + batchSize - 1);
 
-        console.log("Updating rule last_triggered timestamp");
-        const { error: updateError } = await client
-          .from("monitoring_rules")
-          .update({ last_triggered: new Date().toISOString() })
-          .eq("id", rule.id);
+      if (rulesError) {
+        console.error("Error fetching rules batch:", rulesError);
+        continue;
+      }
 
-        if (updateError) {
-          console.error("Error updating rule timestamp:", updateError);
-        } else {
-          console.log("Rule updated successfully");
+      if (!rules?.length) break;
+
+      // Log progress only on first batch
+      if (offset === 0) {
+        console.log(`Processing notifications for ${count} rules`);
+      }
+
+      // Process rules in current batch
+      for (const rule of rules) {
+        try {
+          await monitoringService.sendNotification(
+            rule.notify_email,
+            website.url,
+            newLinks
+          );
+
+          // Update last_triggered with minimal payload
+          await client
+            .from("monitoring_rules")
+            .update({ last_triggered: new Date().toISOString() })
+            .eq("id", rule.id);
+
+          processedCount++;
+        } catch (error) {
+          console.error(`Error processing rule ${rule.id}:`, error);
+          failedCount++;
+          lastError = error;
         }
-
-        results.push({ ruleId: rule.id, success: true });
-      } catch (error) {
-        console.error(`Error processing rule ${rule.id}:`, error);
-        results.push({ ruleId: rule.id, success: false, error: String(error) });
       }
     }
 
-    return NextResponse.json({ success: true, results });
+    return NextResponse.json({
+      success: true,
+      summary: {
+        processed: processedCount,
+        failed: failedCount,
+        lastError: lastError ? String(lastError) : null,
+      },
+    });
   } catch (error) {
     console.error("Error sending notifications:", error);
     return NextResponse.json(

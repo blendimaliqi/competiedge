@@ -600,34 +600,54 @@ export class MonitoringService {
     }
   }
 
+  private async processBatch(
+    websiteId: string,
+    userId: string,
+    ruleIds: string[],
+    batchSize: number = 50
+  ) {
+    const batches = [];
+    for (let i = 0; i < ruleIds.length; i += batchSize) {
+      batches.push(ruleIds.slice(i, i + batchSize));
+    }
+
+    let successCount = 0;
+    const failedRules: string[] = [];
+
+    for (const batch of batches) {
+      try {
+        const { error } = await supabase.rpc("disable_monitoring_rules", {
+          p_website_id: websiteId,
+          p_user_id: userId,
+          p_rule_ids: batch,
+        });
+
+        if (error) {
+          console.error("Error processing batch:", {
+            batchSize: batch.length,
+            error: error.message,
+          });
+          failedRules.push(...batch);
+        } else {
+          successCount += batch.length;
+        }
+      } catch (error) {
+        console.error("Batch processing error:", error);
+        failedRules.push(...batch);
+      }
+    }
+
+    return { successCount, failedRules };
+  }
+
   async stopMonitoring(websiteId: string, userId: string) {
     try {
       console.log("Attempting to stop monitoring:", { websiteId, userId });
 
-      // First, get all rules for this website and user
-      const { data: existingRules, error: fetchError } = await supabase
-        .from("monitoring_rules")
-        .select("*")
-        .eq("website_id", websiteId)
-        .eq("created_by", userId)
-        .eq("enabled", true);
-
-      if (fetchError) {
-        console.error("Error fetching rules:", fetchError);
-        throw new Error(`Failed to fetch rules: ${fetchError.message}`);
-      }
-
-      console.log("Found rules to disable:", existingRules);
-
-      if (!existingRules || existingRules.length === 0) {
-        console.log("No rules found to disable");
-        return null;
-      }
-
-      // Verify website access before attempting to disable rules
+      // First, verify website access
       const { data: website, error: websiteError } = await supabase
         .from("websites")
-        .select("*")
+        .select("created_by, is_public")
         .eq("id", websiteId)
         .single();
 
@@ -639,57 +659,50 @@ export class MonitoringService {
       }
 
       if (!website || (website.created_by !== userId && !website.is_public)) {
-        console.error("User does not have access to website:", websiteId);
         throw new Error(
           "You do not have permission to modify monitoring rules for this website"
         );
       }
 
-      console.log("Calling disable_monitoring_rules with params:", {
-        websiteId,
-        userId,
-        ruleIds: existingRules.map((rule) => rule.id),
-      });
-
-      // Use the stored procedure to disable all rules atomically
-      const { data, error } = await supabase.rpc("disable_monitoring_rules", {
-        p_website_id: websiteId,
-        p_user_id: userId,
-        p_rule_ids: existingRules.map((rule) => rule.id),
-      });
-
-      if (error) {
-        console.error("Error from disable_monitoring_rules:", {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
-        });
-        throw new Error(`Failed to disable rules: ${error.message}`);
-      }
-
-      console.log("Successfully disabled rules:", data);
-
-      // Verify the rules were actually disabled
-      const { data: verifyRules, error: verifyError } = await supabase
+      // Get only rule IDs instead of full objects
+      const { data: ruleIds, error: fetchError } = await supabase
         .from("monitoring_rules")
         .select("id")
         .eq("website_id", websiteId)
         .eq("created_by", userId)
         .eq("enabled", true);
 
-      if (verifyError) {
-        console.error("Error verifying disabled rules:", verifyError);
-      } else if (verifyRules && verifyRules.length > 0) {
-        console.warn(
-          "Some rules are still enabled after disabling:",
-          verifyRules
-        );
-      } else {
-        console.log("Verified all rules are disabled");
+      if (fetchError) {
+        console.error("Error fetching rules:", fetchError);
+        throw new Error(`Failed to fetch rules: ${fetchError.message}`);
       }
 
-      return data;
+      if (!ruleIds || ruleIds.length === 0) {
+        console.log("No rules found to disable");
+        return { successCount: 0, failedRules: [] };
+      }
+
+      const ids = ruleIds.map((r) => r.id);
+      console.log(`Processing ${ids.length} rules in batches`);
+
+      // Process rules in batches
+      const result = await this.processBatch(websiteId, userId, ids);
+
+      // Log summary instead of full objects
+      console.log("Batch processing complete:", {
+        totalRules: ids.length,
+        successCount: result.successCount,
+        failedCount: result.failedRules.length,
+      });
+
+      if (result.failedRules.length > 0) {
+        throw new Error(`Failed to disable ${result.failedRules.length} rules`);
+      }
+
+      return {
+        success: true,
+        totalProcessed: result.successCount,
+      };
     } catch (error) {
       console.error("Error in stopMonitoring:", error);
       throw error;
