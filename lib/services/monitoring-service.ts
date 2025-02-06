@@ -624,96 +624,22 @@ export class MonitoringService {
         return null;
       }
 
-      // Update all rules in parallel
-      console.log(
-        "Starting updates for rules:",
-        existingRules.map((r) => r.id)
-      );
-
-      const updatePromises = existingRules.map(async (rule) => {
-        const { data, error, status } = await supabase
-          .from("monitoring_rules")
-          .update({
-            enabled: false,
-            last_triggered: new Date().toISOString(),
-          })
-          .eq("id", rule.id)
-          .eq("website_id", websiteId)
-          .eq("created_by", userId)
-          .select()
-          .single();
-
-        console.log(`Update result for rule ${rule.id}:`, {
-          data,
-          error,
-          status,
-        });
-
-        if (error) {
-          return { ruleId: rule.id, error, success: false };
-        }
-        return { ruleId: rule.id, data, success: true };
+      // Use the stored procedure to disable all rules atomically
+      const { data, error } = await supabase.rpc("disable_monitoring_rules", {
+        p_website_id: websiteId,
+        p_user_id: userId,
+        p_rule_ids: existingRules.map((rule) => rule.id),
       });
 
-      const results = await Promise.all(updatePromises);
-      console.log("Update results:", results);
-
-      // Check for any errors
-      const errors = results.filter((result) => !result.success);
-
-      if (errors.length > 0) {
-        console.error("Errors updating rules:", errors);
-        throw new Error(
-          `Failed to disable rules: ${errors.map((e) => e.ruleId).join(", ")}`
-        );
+      if (error) {
+        console.error("Error disabling rules:", error);
+        throw new Error(`Failed to disable rules: ${error.message}`);
       }
 
-      // Add a small delay before verification
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      // Verify all rules were disabled
-      const { data: verifyRules, error: verifyError } = await supabase
-        .from("monitoring_rules")
-        .select("*")
-        .eq("website_id", websiteId)
-        .eq("created_by", userId)
-        .eq("enabled", true);
-
-      if (verifyError) {
-        console.error("Error verifying rules:", verifyError);
-        throw new Error(`Failed to verify rules: ${verifyError.message}`);
-      }
-
-      if (verifyRules && verifyRules.length > 0) {
-        const stillEnabled = verifyRules.map((r) => r.id);
-        console.warn("Some rules still enabled:", stillEnabled);
-        throw new Error(`Failed to disable rules: ${stillEnabled.join(", ")}`);
-      }
-
-      // Check if there are any remaining active rules for any website
-      const { data: activeRules, error: activeError } = await supabase
-        .from("monitoring_rules")
-        .select("id")
-        .eq("enabled", true)
-        .eq("created_by", userId)
-        .limit(1);
-
-      if (activeError) {
-        console.error("Error checking active rules:", activeError);
-      } else if (!activeRules || activeRules.length === 0) {
-        // If no active rules remain, pause global monitoring
-        try {
-          await this.pauseMonitoring(userId);
-        } catch (error) {
-          console.error("Error pausing global monitoring:", error);
-          // Don't throw here as the main operation succeeded
-        }
-      }
-
-      console.log("Successfully disabled all monitoring rules");
-      return existingRules.map((rule) => ({ id: rule.id, enabled: false }));
+      console.log("Successfully disabled rules:", data);
+      return data;
     } catch (error) {
-      console.error("Failed to stop monitoring:", error);
+      console.error("Error in stopMonitoring:", error);
       throw error;
     }
   }

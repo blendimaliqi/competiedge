@@ -171,10 +171,15 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
         queryClient.invalidateQueries({ queryKey: ["websites"] }),
       ]);
 
-      // Force immediate refetch
-      await refetch();
+      // Wait for all queries to be refetched
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ["monitoringRules"] }),
+        queryClient.refetchQueries({ queryKey: ["monitoringStatus"] }),
+        queryClient.refetchQueries({ queryKey: ["activeRules"] }),
+        queryClient.refetchQueries({ queryKey: ["websites"] }),
+      ]);
 
-      // Double-check the rules after a short delay
+      // Double-check the rules after a longer delay to account for eventual consistency
       setTimeout(async () => {
         const result = await refetch();
         if (result.data?.some((r: MonitoringRule) => r.enabled)) {
@@ -186,7 +191,7 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
           resetForm();
           setError("Monitoring stopped successfully");
         }
-      }, 2000);
+      }, 5000); // Increased delay to 5 seconds
     },
     onError: (err) => {
       console.error("Failed to stop monitoring:", err);
