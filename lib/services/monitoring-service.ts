@@ -624,6 +624,33 @@ export class MonitoringService {
         return null;
       }
 
+      // Verify website access before attempting to disable rules
+      const { data: website, error: websiteError } = await supabase
+        .from("websites")
+        .select("*")
+        .eq("id", websiteId)
+        .single();
+
+      if (websiteError) {
+        console.error("Error fetching website:", websiteError);
+        throw new Error(
+          `Failed to verify website access: ${websiteError.message}`
+        );
+      }
+
+      if (!website || (website.created_by !== userId && !website.is_public)) {
+        console.error("User does not have access to website:", websiteId);
+        throw new Error(
+          "You do not have permission to modify monitoring rules for this website"
+        );
+      }
+
+      console.log("Calling disable_monitoring_rules with params:", {
+        websiteId,
+        userId,
+        ruleIds: existingRules.map((rule) => rule.id),
+      });
+
       // Use the stored procedure to disable all rules atomically
       const { data, error } = await supabase.rpc("disable_monitoring_rules", {
         p_website_id: websiteId,
@@ -632,11 +659,36 @@ export class MonitoringService {
       });
 
       if (error) {
-        console.error("Error disabling rules:", error);
+        console.error("Error from disable_monitoring_rules:", {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code,
+        });
         throw new Error(`Failed to disable rules: ${error.message}`);
       }
 
       console.log("Successfully disabled rules:", data);
+
+      // Verify the rules were actually disabled
+      const { data: verifyRules, error: verifyError } = await supabase
+        .from("monitoring_rules")
+        .select("id")
+        .eq("website_id", websiteId)
+        .eq("created_by", userId)
+        .eq("enabled", true);
+
+      if (verifyError) {
+        console.error("Error verifying disabled rules:", verifyError);
+      } else if (verifyRules && verifyRules.length > 0) {
+        console.warn(
+          "Some rules are still enabled after disabling:",
+          verifyRules
+        );
+      } else {
+        console.log("Verified all rules are disabled");
+      }
+
       return data;
     } catch (error) {
       console.error("Error in stopMonitoring:", error);

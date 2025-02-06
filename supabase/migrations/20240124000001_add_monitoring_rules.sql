@@ -33,7 +33,23 @@ CREATE POLICY "Enable insert for authenticated users only" ON monitoring_rules
   FOR INSERT WITH CHECK (auth.role() = 'authenticated');
 
 CREATE POLICY "Enable update for authenticated users only" ON monitoring_rules
-  FOR UPDATE USING (auth.role() = 'authenticated' AND created_by = auth.uid());
+  FOR UPDATE USING (
+    auth.role() = 'authenticated' 
+    AND created_by = auth.uid()
+    AND EXISTS (
+      SELECT 1 FROM websites w 
+      WHERE w.id = website_id 
+      AND (w.created_by = auth.uid() OR w.is_public = true)
+    )
+  );
 
 CREATE POLICY "Enable delete for authenticated users only" ON monitoring_rules
-  FOR DELETE USING (auth.role() = 'authenticated' AND created_by = auth.uid()); 
+  FOR DELETE USING (
+    auth.role() = 'authenticated' 
+    AND created_by = auth.uid()
+    AND EXISTS (
+      SELECT 1 FROM websites w 
+      WHERE w.id = website_id 
+      AND (w.created_by = auth.uid() OR w.is_public = true)
+    )
+  ); 
