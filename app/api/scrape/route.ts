@@ -1,45 +1,24 @@
 import { NextResponse } from "next/server";
-import { dynamicScraper } from "@/lib/services/dynamic-scraper";
-import { ScrapeResponse, ApiResponse } from "@/lib/types";
-import { ScrapeRequestBody } from "@/lib/types/api";
+import { DynamicScraper } from "@/lib/services/dynamic-scraper";
 
-export async function POST(
-  request: Request
-): Promise<NextResponse<ApiResponse<ScrapeResponse>>> {
+const scraper = new DynamicScraper();
+
+export async function GET(request: Request) {
   try {
-    const body: ScrapeRequestBody = await request.json();
+    const { searchParams } = new URL(request.url);
+    const url = searchParams.get("url");
 
-    if (!body.url) {
+    if (!url) {
       return NextResponse.json({ error: "URL is required" }, { status: 400 });
     }
 
-    if (body.isInitialAdd) {
-      const response: ScrapeResponse = {
-        title: body.name || "",
-        articleCount: 0,
-        lastChecked: new Date(),
-        url: body.url,
-        data: JSON.stringify([]),
-      };
-      return NextResponse.json(response);
-    }
+    console.log(`Scraping website: ${url}`);
+    const { articles } = await scraper.scrape(url);
 
-    const { title, articles } = await dynamicScraper.scrape(body.url);
-
-    const response: ScrapeResponse = {
-      title,
-      articleCount: articles.length,
-      lastChecked: new Date(),
-      url: body.url,
-      data: JSON.stringify(articles),
-    };
-
-    return NextResponse.json(response);
+    return NextResponse.json({ articles });
   } catch (error) {
     console.error("Scraping error:", error);
-    return NextResponse.json(
-      { error: "Failed to scrape website" },
-      { status: 500 }
-    );
+    const message = error instanceof Error ? error.message : "Scraping failed";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

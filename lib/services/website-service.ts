@@ -1,17 +1,8 @@
 import { Website, Article } from "@/lib/types";
 import { supabase } from "@/lib/supabase";
 import { Database } from "@/lib/database.types";
-import { DynamicScraper } from "./dynamic-scraper";
-import { parseDate } from "../utils";
 
 type ArticleRow = Database["public"]["Tables"]["articles"]["Row"];
-
-const scraper = new DynamicScraper();
-
-interface UpdateWebsiteOptions {
-  websiteId: string;
-  secret?: string;
-}
 
 export class WebsiteService {
   private async validateAccess(
@@ -120,7 +111,7 @@ export class WebsiteService {
       throw new Error("Failed to insert new articles");
     }
 
-    // Update article count using a subquery instead of raw SQL
+    // Update article count using a subquery
     const { error: updateError } = await supabase
       .from("websites")
       .update({
@@ -140,7 +131,10 @@ export class WebsiteService {
   async updateWebsite({
     websiteId,
     secret,
-  }: UpdateWebsiteOptions): Promise<{ newArticles: Article[] }> {
+  }: {
+    websiteId: string;
+    secret?: string;
+  }): Promise<{ newArticles: Article[] }> {
     console.log(`Starting website update for ID: ${websiteId}`);
 
     try {
@@ -153,14 +147,27 @@ export class WebsiteService {
       // Update last checked timestamp
       await this.updateLastChecked(websiteId);
 
-      // Scrape new articles
-      console.log(`Scraping website: ${website.url}`);
-      const { articles: scrapedArticles } = await scraper.scrape(website.url);
+      // Make request to scraping API endpoint
+      const response = await fetch(
+        `/api/scrape?url=${encodeURIComponent(website.url)}`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to scrape website");
+      }
+
+      const { articles: scrapedArticles } = await response.json();
 
       // Filter out existing articles
       const existingUrls = new Set(website.articles?.map((a) => a.url) || []);
       const newArticles = scrapedArticles.filter(
-        (article) => !existingUrls.has(article.url)
+        (article: Article) => !existingUrls.has(article.url)
       );
 
       console.log(`Found ${newArticles.length} new articles`);
