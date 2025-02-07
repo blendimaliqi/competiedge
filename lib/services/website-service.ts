@@ -257,7 +257,47 @@ export class WebsiteService {
       throw new Error(errorData.error || "Failed to delete website");
     }
   }
+
+  async addWebsite(data: {
+    name: string;
+    url: string;
+    customContentPatterns?: string[];
+    customSkipPatterns?: string[];
+  }) {
+    try {
+      const { data: website, error } = await supabase
+        .from("websites")
+        .insert({
+          name: data.name,
+          url: data.url,
+          custom_content_patterns: data.customContentPatterns || [],
+          custom_skip_patterns: data.customSkipPatterns || [],
+          article_count: 0,
+          created_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Error adding website:", error);
+        throw new Error("Failed to add website");
+      }
+
+      return {
+        ...website,
+        lastChecked: website.last_checked,
+        createdAt: website.created_at,
+        articleCount: website.article_count,
+        customContentPatterns: website.custom_content_patterns || [],
+        customSkipPatterns: website.custom_skip_patterns || [],
+      };
+    } catch (error) {
+      console.error("Failed to add website:", error);
+      throw error;
+    }
+  }
 }
 
 // Export a singleton instance
-export const websiteService = new WebsiteService();
+const websiteService = new WebsiteService();
+export const addWebsite = websiteService.addWebsite.bind(websiteService);
