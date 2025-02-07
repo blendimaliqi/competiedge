@@ -299,5 +299,5 @@ export class WebsiteService {
 }
 
 // Export a singleton instance
-const websiteService = new WebsiteService();
+export const websiteService = new WebsiteService();
 export const addWebsite = websiteService.addWebsite.bind(websiteService);
