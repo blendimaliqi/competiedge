@@ -1,0 +1,49 @@
+FROM node:18-slim
+
+WORKDIR /app
+
+# Install Chrome dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    chromium \
+    chromium-driver \
+    cron \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install --legacy-peer-deps
+
+# Copy application files
+COPY scripts ./scripts
+COPY lib ./lib
+COPY app ./app
+
+# Create env file from environment variables
+RUN echo "#!/bin/sh\n\
+echo \"NEXT_PUBLIC_APP_URL=\${NEXT_PUBLIC_APP_URL}\" > /app/.env\n\
+echo \"RESEND_API_KEY=\${RESEND_API_KEY}\" >> /app/.env\n\
+echo \"NEXT_PUBLIC_SUPABASE_URL=\${NEXT_PUBLIC_SUPABASE_URL}\" >> /app/.env\n\
+echo \"NEXT_PUBLIC_SUPABASE_ANON_KEY=\${NEXT_PUBLIC_SUPABASE_ANON_KEY}\" >> /app/.env\n\
+echo \"SUPABASE_SERVICE_ROLE_KEY=\${SUPABASE_SERVICE_ROLE_KEY}\" >> /app/.env\n\
+echo \"CRON_SECRET=\${CRON_SECRET}\" >> /app/.env\n\
+cron -f" > /app/start.sh
+
+RUN chmod +x /app/start.sh
+
+# Add crontab file
+COPY crontab /etc/cron.d/app-cron
+RUN chmod 0644 /etc/cron.d/app-cron
+RUN crontab /etc/cron.d/app-cron
+
+# Create log directory
+RUN mkdir -p /var/log/cron
+RUN touch /var/log/cron/cron.log
+
+# Start cron with environment variables
+CMD ["/app/start.sh"] 

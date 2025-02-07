@@ -1,0 +1,42 @@
+version: "3"
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - CRON_SECRET=${CRON_SECRET}
+    ports:
+      - "3002:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  cron:
+    build:
+      context: .
+      dockerfile: Dockerfile.cron
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_APP_URL=http://app:3000
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - CRON_SECRET=${CRON_SECRET}
+    volumes:
+      - cron-logs:/var/log/cron
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  cron-logs:

@@ -1,0 +1,10 @@
+# Load environment variables
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+BASH_ENV=/app/.env
+
+# Run monitoring check daily at 23:00
+0 23 * * * cd /app && node scripts/update-data.js >> /var/log/cron/cron.log 2>&1
+
+# Run data update every hour
+0 * * * * cd /app && node scripts/update-data.js >> /var/log/cron/cron.log 2>&1 
