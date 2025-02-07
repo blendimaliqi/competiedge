@@ -163,35 +163,39 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
     },
     onSuccess: async () => {
       console.log("Monitoring stopped, refreshing data...");
-      // Invalidate all relevant queries
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["monitoringRules"] }),
-        queryClient.invalidateQueries({ queryKey: ["monitoringStatus"] }),
-        queryClient.invalidateQueries({ queryKey: ["activeRules"] }),
-        queryClient.invalidateQueries({ queryKey: ["websites"] }),
-      ]);
 
-      // Wait for all queries to be refetched
-      await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["monitoringRules"] }),
-        queryClient.refetchQueries({ queryKey: ["monitoringStatus"] }),
-        queryClient.refetchQueries({ queryKey: ["activeRules"] }),
-        queryClient.refetchQueries({ queryKey: ["websites"] }),
-      ]);
+      // Invalidate and wait for refetch of monitoring rules
+      await queryClient.invalidateQueries({
+        queryKey: ["monitoringRules", websiteId],
+      });
 
-      // Double-check the rules after a longer delay to account for eventual consistency
-      setTimeout(async () => {
-        const result = await refetch();
-        if (result.data?.some((r: MonitoringRule) => r.enabled)) {
-          console.warn("Some rules are still enabled after stop operation");
-          setError(
-            "Warning: Some monitoring rules may still be active. Please try again or contact support if the issue persists."
-          );
-        } else {
-          resetForm();
-          setError("Monitoring stopped successfully");
-        }
-      }, 5000); // Increased delay to 5 seconds
+      // Wait a moment for the database to settle
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      // Fetch the latest rules
+      const result = await refetch();
+
+      // Check if any rules are still enabled
+      const hasEnabledRules = result.data?.some(
+        (r: MonitoringRule) => r.enabled
+      );
+
+      if (hasEnabledRules) {
+        console.warn("Some rules are still enabled after stop operation");
+        setError(
+          "Warning: Some monitoring rules may still be active. Please try again or contact support if the issue persists."
+        );
+      } else {
+        resetForm();
+        setError("Monitoring stopped successfully");
+
+        // Refresh other related queries after successful stop
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["monitoringStatus"] }),
+          queryClient.invalidateQueries({ queryKey: ["activeRules"] }),
+          queryClient.invalidateQueries({ queryKey: ["websites"] }),
+        ]);
+      }
     },
     onError: (err) => {
       console.error("Failed to stop monitoring:", err);
