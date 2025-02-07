@@ -644,28 +644,8 @@ export class MonitoringService {
     try {
       console.log("Attempting to stop monitoring:", { websiteId, userId });
 
-      // First, verify website access
-      const { data: website, error: websiteError } = await supabase
-        .from("websites")
-        .select("created_by, is_public")
-        .eq("id", websiteId)
-        .single();
-
-      if (websiteError) {
-        console.error("Error fetching website:", websiteError);
-        throw new Error(
-          `Failed to verify website access: ${websiteError.message}`
-        );
-      }
-
-      if (!website || (website.created_by !== userId && !website.is_public)) {
-        throw new Error(
-          "You do not have permission to modify monitoring rules for this website"
-        );
-      }
-
-      // Get only rule IDs instead of full objects
-      const { data: ruleIds, error: fetchError } = await supabase
+      // Get monitoring rules for this website and user
+      const { data: rules, error: fetchError } = await supabase
         .from("monitoring_rules")
         .select("id")
         .eq("website_id", websiteId)
@@ -677,12 +657,12 @@ export class MonitoringService {
         throw new Error(`Failed to fetch rules: ${fetchError.message}`);
       }
 
-      if (!ruleIds || ruleIds.length === 0) {
+      if (!rules || rules.length === 0) {
         console.log("No rules found to disable");
         return { successCount: 0, failedRules: [] };
       }
 
-      const ids = ruleIds.map((r) => r.id);
+      const ids = rules.map((r) => r.id);
       console.log(`Processing ${ids.length} rules in batches`);
 
       // Process rules in batches
@@ -699,11 +679,8 @@ export class MonitoringService {
         throw new Error(`Failed to disable ${result.failedRules.length} rules`);
       }
 
-      return {
-        success: true,
-        totalProcessed: result.successCount,
-      };
-    } catch (error) {
+      return result;
+    } catch (error: any) {
       console.error("Error in stopMonitoring:", error);
       throw error;
     }

@@ -9,15 +9,6 @@ DECLARE
   v_failed_rules uuid[];
   v_error_message text;
 BEGIN
-  -- Verify user has access to the website
-  IF NOT EXISTS (
-    SELECT 1 FROM websites w 
-    WHERE w.id = p_website_id 
-    AND (w.created_by = p_user_id OR w.is_public = true)
-  ) THEN
-    RAISE EXCEPTION 'User does not have access to website %', p_website_id;
-  END IF;
-
   -- Verify all rules exist and belong to the user
   SELECT array_agg(id) INTO v_failed_rules
   FROM unnest(p_rule_ids) AS rule_id
