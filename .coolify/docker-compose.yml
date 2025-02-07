@@ -26,7 +26,7 @@ services:
       dockerfile: Dockerfile.cron
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_APP_URL=http://app:3000
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
       - RESEND_API_KEY=${RESEND_API_KEY}
       - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
