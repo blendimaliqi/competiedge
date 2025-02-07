@@ -62,8 +62,6 @@ export function CompetitorDashboard() {
       await addWebsite({
         name: new URL(validatedUrl).hostname,
         url: validatedUrl,
-        articleCount: 0,
-        category_id: null,
       });
     },
     onSuccess: () => {
