@@ -32,7 +32,14 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
     queryFn: async () => {
       console.log("Fetching monitoring rules for website:", websiteId);
       const response = await fetch(
-        `/api/monitoring/rules?websiteId=${websiteId}`
+        `/api/monitoring/rules?websiteId=${websiteId}&_=${Date.now()}`,
+        {
+          cache: "no-store",
+          headers: {
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+          },
+        }
       );
       if (!response.ok) {
         const errorData = await response.json();
@@ -51,7 +58,7 @@ export function MonitoringRules({ websiteId }: { websiteId: string }) {
 
   // Get the active rule's email if it exists
   const activeRule = rules?.find((r: MonitoringRule) => r.enabled);
-  console.log("Active rule:", activeRule);
+  console.log("Active rule:", activeRule, rules);
 
   const resetForm = () => {
     setNewRule({
