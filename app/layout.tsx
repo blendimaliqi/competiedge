@@ -3,6 +3,7 @@ import "./globals.css";
 import { Providers } from "@/components/providers";
 import { AuthProvider } from "@/components/auth/auth-provider";
 import { LoginButton } from "@/components/auth/login-button";
+import { Toaster } from "@/components/ui/toaster";
 
 export const metadata: Metadata = {
   title: "CompetieEdge - Competitor Website Monitoring",
@@ -30,6 +31,7 @@ export default function RootLayout({
             </div>
           </AuthProvider>
         </Providers>
+        <Toaster />
       </body>
     </html>
   );

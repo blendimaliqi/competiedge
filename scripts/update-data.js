@@ -1,18 +1,28 @@
 const https = require("https");
 const http = require("http");
 const { URL } = require("url");
+const { createClient } = require("@supabase/supabase-js");
 
 // Configuration
 const CONFIG = {
   MAX_RETRIES: 3,
   TIMEOUT_MS: 30000, // 30 seconds
-  RETRY_DELAY_MS: 5000, // 5 seconds
+  RETRY_DELAY_MS: 5000, // 5 seconds between retries
+  BATCH_SIZE: 3, // Number of websites to process in parallel
+  BATCH_DELAY_MS: 1000, // Delay between batches
   MAX_REDIRECTS: 5,
+  RATE_LIMIT_DELAY_MS: 2000, // Minimum delay between requests
 };
 
 // Helper function to wait for a specified time
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Helper function for rate limiting
+async function rateLimitedRequest(fn) {
+  await sleep(CONFIG.RATE_LIMIT_DELAY_MS);
+  return fn();
 }
 
 async function makeRequest(url, options, retryCount = 0, redirectCount = 0) {
@@ -181,127 +191,179 @@ async function checkWebsite(website, appUrl, cronSecret, serviceRoleKey) {
   console.log(`Website ID: ${website.id}`);
 
   try {
-    // Add a random delay between 2-5 seconds before checking each website
-    const delay = Math.floor(Math.random() * 3000) + 2000;
-    console.log(`Waiting ${delay}ms before checking...`);
-    await new Promise((resolve) => setTimeout(resolve, delay));
-
     // Make the update request with extended timeout
     console.log(
       "Making update request to:",
       `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`
     );
-    const updateResponse = await makeRequest(
-      `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${serviceRoleKey}`,
-        },
-      }
-    );
 
-    // Check for errors
-    if (updateResponse.error) {
-      console.error("Update failed:", updateResponse.error);
-      return;
-    }
-
-    // Check for new links in the update response
-    if (updateResponse.newLinks && updateResponse.newLinks.length > 0) {
-      console.log(
-        `Found ${updateResponse.newLinks.length} new links for ${website.name}:`,
-        updateResponse.newLinks
-      );
-
-      // Send notification
-      console.log("Sending notification for new links...");
-      const notifyResponse = await makeRequest(
-        `${appUrl}/api/monitoring/notify?secret=${cronSecret}`,
+    const updateResponse = await rateLimitedRequest(() =>
+      makeRequest(
+        `${appUrl}/api/websites/${website.id}/update?secret=${cronSecret}`,
         {
-          method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${serviceRoleKey}`,
           },
-          body: JSON.stringify({
-            websiteId: website.id,
-            newLinks: updateResponse.newLinks,
-          }),
         }
-      );
-      console.log("Notification response:", notifyResponse);
-    } else {
-      console.log(`No new links found for ${website.name}`);
+      )
+    );
+
+    // Check for errors
+    if (updateResponse.error) {
+      throw new Error(`Update failed: ${updateResponse.error}`);
     }
+
+    // Log success
+    if (updateResponse.newArticles?.length > 0) {
+      console.log(
+        `Found ${updateResponse.newArticles.length} new articles for ${website.name}`
+      );
+    } else {
+      console.log(`No new articles found for ${website.name}`);
+    }
+
+    return updateResponse;
   } catch (error) {
     console.error(`Error checking website ${website.name}:`, error);
+    throw error;
   }
 }
 
 async function main() {
   try {
-    console.log("Starting monitoring check...");
-    console.log("Environment check:");
-    console.log("- APP_URL set:", !!process.env.NEXT_PUBLIC_APP_URL);
-    console.log("- CRON_SECRET set:", !!process.env.CRON_SECRET);
-    console.log("- RESEND_API_KEY set:", !!process.env.RESEND_API_KEY);
-    console.log("- SUPABASE_URL set:", !!process.env.NEXT_PUBLIC_SUPABASE_URL);
-    console.log(
-      "- SUPABASE_ANON_KEY set:",
-      !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-    );
-    console.log(
-      "- SUPABASE_SERVICE_ROLE_KEY set:",
-      !!process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
+    // Validate environment variables
+    const requiredEnvVars = [
+      "NEXT_PUBLIC_APP_URL",
+      "CRON_SECRET",
+      "NEXT_PUBLIC_SUPABASE_URL",
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+      "SUPABASE_SERVICE_ROLE_KEY",
+    ];
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-    const cronSecret = process.env.CRON_SECRET;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (!appUrl || !cronSecret || !serviceRoleKey) {
+    const missingEnvVars = requiredEnvVars.filter((name) => !process.env[name]);
+    if (missingEnvVars.length > 0) {
       throw new Error(
-        "Missing required environment variables: NEXT_PUBLIC_APP_URL, CRON_SECRET, or SUPABASE_SERVICE_ROLE_KEY"
+        `Missing required environment variables: ${missingEnvVars.join(", ")}`
       );
     }
 
-    // Get all websites that need to be checked
-    console.log("Fetching websites to check...");
-    const websitesResponse = await makeRequest(
-      `${appUrl}/api/websites?secret=${cronSecret}`,
+    console.log("Starting monitoring check...");
+    console.log("Environment check: All required variables are set");
+
+    // Initialize Supabase client
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${serviceRoleKey}`,
+        auth: {
+          persistSession: false,
         },
       }
     );
 
-    const websites = websitesResponse.data || [];
-    console.log(`Found ${websites.length} websites to check`);
+    // Fetch all active websites
+    console.log("Fetching websites...");
+    const { data: websites, error: websitesError } = await supabase
+      .from("websites")
+      .select("*")
+      .order("last_checked", { ascending: true });
 
-    // Check each website for updates
-    for (const website of websites) {
-      await checkWebsite(website, appUrl, cronSecret, serviceRoleKey);
+    if (websitesError) {
+      throw new Error(`Failed to fetch websites: ${websitesError.message}`);
     }
 
-    console.log("Monitoring check completed successfully");
+    if (!websites || websites.length === 0) {
+      console.log("No websites found to check");
+      return;
+    }
+
+    console.log(`Found ${websites.length} websites to check`);
+
+    // Process websites in batches
+    const results = {
+      success: 0,
+      failed: 0,
+      errors: [],
+    };
+
+    for (let i = 0; i < websites.length; i += CONFIG.BATCH_SIZE) {
+      const batch = websites.slice(i, i + CONFIG.BATCH_SIZE);
+      console.log(
+        `Processing batch ${
+          Math.floor(i / CONFIG.BATCH_SIZE) + 1
+        } of ${Math.ceil(websites.length / CONFIG.BATCH_SIZE)}`
+      );
+
+      try {
+        const batchResults = await Promise.allSettled(
+          batch.map((website) =>
+            checkWebsite(
+              website,
+              process.env.NEXT_PUBLIC_APP_URL,
+              process.env.CRON_SECRET,
+              process.env.SUPABASE_SERVICE_ROLE_KEY
+            )
+          )
+        );
+
+        // Process batch results
+        batchResults.forEach((result, index) => {
+          const website = batch[index];
+          if (result.status === "fulfilled") {
+            results.success++;
+            console.log(`Successfully checked ${website.name}`);
+          } else {
+            results.failed++;
+            results.errors.push({
+              website: website.name,
+              error: result.reason?.message || "Unknown error",
+            });
+            console.error(
+              `Failed to check ${website.name}:`,
+              result.reason?.message || "Unknown error"
+            );
+          }
+        });
+
+        // Add delay between batches if not the last batch
+        if (i + CONFIG.BATCH_SIZE < websites.length) {
+          console.log(
+            `Waiting ${CONFIG.BATCH_DELAY_MS}ms before next batch...`
+          );
+          await sleep(CONFIG.BATCH_DELAY_MS);
+        }
+      } catch (error) {
+        console.error(`Error processing batch:`, error);
+        results.failed += batch.length;
+        batch.forEach((website) => {
+          results.errors.push({
+            website: website.name,
+            error: error.message || "Batch processing error",
+          });
+        });
+      }
+    }
+
+    // Log final results
+    console.log("\nUpdate completed!");
+    console.log("Results:");
+    console.log(`- Successful updates: ${results.success}`);
+    console.log(`- Failed updates: ${results.failed}`);
+    if (results.errors.length > 0) {
+      console.log("\nErrors:");
+      results.errors.forEach(({ website, error }) => {
+        console.log(`- ${website}: ${error}`);
+      });
+    }
   } catch (error) {
-    console.error("Error in monitoring check:", error);
+    console.error("Fatal error:", error);
     process.exit(1);
   }
 }
 
-// Handle uncaught errors
-process.on("uncaughtException", (error) => {
-  console.error("Uncaught Exception:", error);
+// Run the script
+main().catch((error) => {
+  console.error("Unhandled error:", error);
   process.exit(1);
 });
-
-process.on("unhandledRejection", (error) => {
-  console.error("Unhandled Rejection:", error);
-  process.exit(1);
-});
-
-main();

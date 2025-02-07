@@ -1,173 +1,256 @@
 import { Website, Article } from "@/lib/types";
 import { supabase } from "@/lib/supabase";
 import { Database } from "@/lib/database.types";
+import { DynamicScraper } from "./dynamic-scraper";
 import { parseDate } from "../utils";
 
 type ArticleRow = Database["public"]["Tables"]["articles"]["Row"];
 
-export async function getWebsites(
-  categoryId: string | null = null
-): Promise<Website[]> {
-  let query = supabase.from("websites").select(`
-      *,
-      articles(*)
-    `);
+const scraper = new DynamicScraper();
 
-  if (categoryId === null) {
-    query = query.is("category_id", null);
-  } else {
-    query = query.eq("category_id", categoryId);
-  }
-
-  const { data, error } = await query;
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return (data || []).map((website) => ({
-    ...website,
-    lastChecked: website.last_checked,
-    createdAt: website.created_at,
-    articleCount: website.article_count,
-    customContentPatterns: website.custom_content_patterns || [],
-    customSkipPatterns: website.custom_skip_patterns || [],
-    articles: website.articles?.map((article: any) => ({
-      id: article.id,
-      title: article.title,
-      url: article.url,
-      path: article.path,
-      summary: article.summary || undefined,
-      date: article.published_date || undefined,
-      firstSeen: article.first_seen,
-    })),
-  }));
+interface UpdateWebsiteOptions {
+  websiteId: string;
+  secret?: string;
 }
 
-export async function updateWebsite(id: string): Promise<Website> {
-  try {
-    console.log("Starting website update for ID:", id);
+export class WebsiteService {
+  private async validateAccess(
+    websiteId: string,
+    secret?: string
+  ): Promise<void> {
+    if (secret) {
+      const { data: website, error } = await supabase
+        .from("websites")
+        .select("update_secret")
+        .eq("id", websiteId)
+        .single();
 
-    // First, just get the basic website info without articles
-    const { data: website, error: websiteError } = await supabase
+      if (error) {
+        console.error("Error validating website access:", error);
+        throw new Error("Failed to validate website access");
+      }
+
+      if (website.update_secret !== secret) {
+        throw new Error("Invalid update secret");
+      }
+    }
+  }
+
+  async getWebsiteDetails(websiteId: string): Promise<Website> {
+    const { data: website, error } = await supabase
       .from("websites")
-      .select("*")
-      .eq("id", id)
+      .select(
+        `
+        *,
+        articles(*),
+        monitoring_rules(*)
+      `
+      )
+      .eq("id", websiteId)
       .single();
 
-    if (websiteError) {
-      console.error("Error fetching website:", websiteError);
-      throw websiteError;
+    if (error) {
+      console.error("Error fetching website details:", error);
+      throw new Error("Failed to fetch website details");
     }
 
-    // Update the last checked timestamp
-    const { data: updatedWebsite, error: updateError } = await supabase
+    return {
+      ...website,
+      lastChecked: website.last_checked,
+      createdAt: website.created_at,
+      articleCount: website.article_count,
+      customContentPatterns: website.custom_content_patterns || [],
+      customSkipPatterns: website.custom_skip_patterns || [],
+      monitoringRules:
+        website.monitoring_rules?.map((rule: any) => ({
+          id: rule.id,
+          enabled: rule.enabled,
+          notifyEmail: rule.notify_email,
+          type: rule.type,
+          lastTriggered: rule.last_triggered,
+        })) || [],
+      articles: website.articles?.map((article: ArticleRow) => ({
+        id: article.id,
+        title: article.title,
+        url: article.url,
+        path: article.path,
+        summary: article.summary || undefined,
+        date: article.published_date || undefined,
+        firstSeen: article.first_seen,
+      })),
+    };
+  }
+
+  private async updateLastChecked(websiteId: string): Promise<void> {
+    const { error } = await supabase
       .from("websites")
       .update({
         last_checked: new Date().toISOString(),
       })
-      .eq("id", id)
-      .select()
-      .single();
+      .eq("id", websiteId);
 
-    if (updateError) {
-      console.error("Error updating website:", updateError);
-      throw updateError;
+    if (error) {
+      console.error("Error updating last checked timestamp:", error);
+      throw new Error("Failed to update last checked timestamp");
     }
-
-    // Return the basic website info
-    return {
-      ...updatedWebsite,
-      articles: [], // Articles will be updated in the background
-    };
-  } catch (error) {
-    console.error("Failed to update website:", error);
-    if (error instanceof Error) {
-      throw new Error(`Failed to update website: ${error.message}`);
-    }
-    throw error;
   }
-}
 
-export async function addWebsite(website: Partial<Website>): Promise<Website> {
-  try {
-    if (!process.env.NEXT_PUBLIC_APP_URL) {
-      throw new Error("NEXT_PUBLIC_APP_URL is not set");
+  private async insertNewArticles(
+    websiteId: string,
+    articles: Article[]
+  ): Promise<void> {
+    if (articles.length === 0) {
+      return;
     }
 
-    // Detect RSS feed through API endpoint
-    const response = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL}/api/rss/detect`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ url: website.url }),
-      }
+    const { error } = await supabase.from("articles").insert(
+      articles.map((article) => ({
+        website_id: websiteId,
+        title: article.title,
+        url: article.url,
+        path: article.path,
+        summary: article.summary,
+        published_date: article.date,
+        first_seen: new Date().toISOString(),
+      }))
     );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("RSS feed detection failed:", {
-        status: response.status,
-        error: errorText,
-      });
-      throw new Error(`Failed to detect RSS feed: ${errorText}`);
+    if (error) {
+      console.error("Error inserting new articles:", error);
+      throw new Error("Failed to insert new articles");
     }
 
-    const { feedUrl } = await response.json();
-
-    const { data, error } = await supabase
+    // Update article count using a subquery instead of raw SQL
+    const { error: updateError } = await supabase
       .from("websites")
-      .insert({
-        name: website.name,
-        url: website.url,
-        article_count: 0,
-        feed_url: feedUrl,
-        feed_enabled: !!feedUrl,
+      .update({
+        article_count: supabase
+          .from("articles")
+          .select("id", { count: "exact", head: true })
+          .eq("website_id", websiteId),
       })
-      .select()
-      .single();
+      .eq("id", websiteId);
 
-    if (error) throw error;
-    return data;
-  } catch (error) {
-    console.error("Failed to add website:", error);
-    throw error;
+    if (updateError) {
+      console.error("Error updating article count:", updateError);
+      throw new Error("Failed to update article count");
+    }
+  }
+
+  async updateWebsite({
+    websiteId,
+    secret,
+  }: UpdateWebsiteOptions): Promise<{ newArticles: Article[] }> {
+    console.log(`Starting website update for ID: ${websiteId}`);
+
+    try {
+      // Validate access if secret is provided
+      await this.validateAccess(websiteId, secret);
+
+      // Get website details
+      const website = await this.getWebsiteDetails(websiteId);
+
+      // Update last checked timestamp
+      await this.updateLastChecked(websiteId);
+
+      // Scrape new articles
+      console.log(`Scraping website: ${website.url}`);
+      const { articles: scrapedArticles } = await scraper.scrape(website.url);
+
+      // Filter out existing articles
+      const existingUrls = new Set(website.articles?.map((a) => a.url) || []);
+      const newArticles = scrapedArticles.filter(
+        (article) => !existingUrls.has(article.url)
+      );
+
+      console.log(`Found ${newArticles.length} new articles`);
+
+      // Insert new articles
+      await this.insertNewArticles(websiteId, newArticles);
+
+      return { newArticles };
+    } catch (error) {
+      console.error("Failed to update website:", error);
+      if (error instanceof Error) {
+        throw new Error(`Failed to update website: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+
+  // Keep existing methods but update them to use the new consolidated functionality
+  async getWebsites(categoryId: string | null = null): Promise<Website[]> {
+    let query = supabase.from("websites").select(`
+      *,
+      articles(*)
+    `);
+
+    if (categoryId === null) {
+      query = query.is("category_id", null);
+    } else {
+      query = query.eq("category_id", categoryId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error("Error fetching websites:", error);
+      throw new Error("Failed to fetch websites");
+    }
+
+    return (data || []).map((website) => ({
+      ...website,
+      lastChecked: website.last_checked,
+      createdAt: website.created_at,
+      articleCount: website.article_count,
+      customContentPatterns: website.custom_content_patterns || [],
+      customSkipPatterns: website.custom_skip_patterns || [],
+      articles: website.articles?.map((article: any) => ({
+        id: article.id,
+        title: article.title,
+        url: article.url,
+        path: article.path,
+        summary: article.summary || undefined,
+        date: article.published_date || undefined,
+        firstSeen: article.first_seen,
+      })),
+    }));
+  }
+
+  async updateWebsitePatterns(
+    websiteId: string,
+    customContentPatterns?: string[],
+    customSkipPatterns?: string[]
+  ): Promise<Website> {
+    const response = await fetch(`/api/websites/${websiteId}/patterns`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        customContentPatterns,
+        customSkipPatterns,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to update website patterns");
+    }
+
+    return response.json();
+  }
+
+  async deleteWebsite(id: string): Promise<void> {
+    const response = await fetch(`/api/websites/${id}`, {
+      method: "DELETE",
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || "Failed to delete website");
+    }
   }
 }
 
-export async function updateWebsitePatterns(
-  websiteId: string,
-  customContentPatterns?: string[],
-  customSkipPatterns?: string[]
-): Promise<Website> {
-  const response = await fetch(`/api/websites/${websiteId}/patterns`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      customContentPatterns,
-      customSkipPatterns,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error("Failed to update website patterns");
-  }
-
-  return response.json();
-}
-
-export async function deleteWebsite(id: string): Promise<void> {
-  const response = await fetch(`/api/websites/${id}`, {
-    method: "DELETE",
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.error || "Failed to delete website");
-  }
-}
+// Export a singleton instance
+export const websiteService = new WebsiteService();

@@ -29,6 +29,13 @@ export interface Website {
   feed_url?: string | null;
   feed_enabled?: boolean;
   category_id?: string | null;
+  monitoringRules?: {
+    id: string;
+    enabled: boolean;
+    notifyEmail: string;
+    type: "ARTICLE_COUNT" | "KEYWORD" | "SOCIAL_MENTIONS" | "CONTENT_CHANGE";
+    lastTriggered?: string;
+  }[];
 }
 
 export interface CreateWebsiteDTO {

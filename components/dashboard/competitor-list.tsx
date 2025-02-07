@@ -2,18 +2,19 @@
 
 import { useState } from "react";
 import { Website, Article, Category } from "@/lib/types";
-import {
-  updateWebsite,
-  updateWebsitePatterns,
-  deleteWebsite,
-  getWebsites,
-} from "@/lib/services/website-service";
+import { websiteService } from "@/lib/services/website-service";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Settings, InfoIcon, ArrowUpDown } from "lucide-react";
+import {
+  RefreshCw,
+  Settings,
+  InfoIcon,
+  ArrowUpDown,
+  Loader2,
+} from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -31,6 +32,7 @@ import {
 } from "@/components/ui/dialog";
 import { WebsiteCard } from "./website-card";
 import { formatDate, formatDuration } from "@/lib/utils";
+import { useToast } from "@/components/ui";
 
 interface CompetitorListProps {
   categoryId: string | null;
@@ -43,6 +45,7 @@ export function CompetitorList({
   categories,
   onDeleteCategory,
 }: CompetitorListProps) {
+  const { toast } = useToast();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [newArticles, setNewArticles] = useState<{ [key: string]: Article[] }>(
@@ -83,76 +86,106 @@ export function CompetitorList({
   const { data: websites = [], isLoading } = useQuery({
     queryKey: ["websites", categoryId, sortOrder],
     queryFn: async () => {
-      const data = await getWebsites(categoryId);
-      return data.sort((a, b) => {
-        const dateA = new Date(a.createdAt || 0).getTime();
-        const dateB = new Date(b.createdAt || 0).getTime();
-        return sortOrder === "newest" ? dateB - dateA : dateA - dateB;
-      });
+      try {
+        const data = await websiteService.getWebsites(categoryId);
+        return data.sort((a: Website, b: Website) => {
+          const dateA = new Date(a.createdAt || 0).getTime();
+          const dateB = new Date(b.createdAt || 0).getTime();
+          return sortOrder === "newest" ? dateB - dateA : dateA - dateB;
+        });
+      } catch (error) {
+        console.error("Failed to fetch websites:", error);
+        toast({
+          title: "Error",
+          description: "Failed to fetch websites. Please try again.",
+          variant: "destructive",
+        });
+        return [];
+      }
     },
   });
 
   const updateWebsiteMutation = useMutation({
-    mutationFn: (websiteId: string) => updateWebsite(websiteId),
+    mutationFn: async (websiteId: string) => {
+      try {
+        const { newArticles } = await websiteService.updateWebsite({
+          websiteId,
+        });
+        return { websiteId, newArticles };
+      } catch (error) {
+        console.error("Failed to update website:", error);
+        throw error;
+      }
+    },
     onMutate: (websiteId) => {
-      // Add website to refreshing set when mutation starts
       setRefreshingWebsites(
         (prev) => new Set([...Array.from(prev), websiteId])
       );
+      setError(null);
     },
     onSettled: (_, __, websiteId) => {
-      // Remove website from refreshing set when mutation completes (success or error)
       setRefreshingWebsites((prev) => {
         const next = new Set(Array.from(prev));
         next.delete(websiteId);
         return next;
       });
     },
-    onSuccess: (updatedWebsite) => {
+    onSuccess: ({ websiteId, newArticles: updatedArticles }) => {
       queryClient.invalidateQueries({ queryKey: ["websites"] });
-      const currentWebsite = websites.find((w) => w.id === updatedWebsite.id);
-      if (currentWebsite) {
-        const currentUrls = new Set(
-          currentWebsite.articles?.map((a) => a.url) || []
+
+      if (updatedArticles.length > 0) {
+        setSitesWithNewContent(
+          (prev) => new Set([...Array.from(prev), websiteId])
         );
-        const newFoundArticles = updatedWebsite.articles?.filter(
-          (article) => !currentUrls.has(article.url)
+        setNewArticles((prev) => ({
+          ...prev,
+          [websiteId]: updatedArticles,
+        }));
+        setExpandedNewArticles(
+          (prev) => new Set([...Array.from(prev), websiteId])
         );
 
-        if (newFoundArticles?.length) {
-          setSitesWithNewContent(
-            (prev) => new Set([...Array.from(prev), updatedWebsite.id])
-          );
-          setNewArticles((prev) => ({
-            ...prev,
-            [updatedWebsite.id]: newFoundArticles,
-          }));
-          setExpandedNewArticles(
-            (prev) => new Set([...Array.from(prev), updatedWebsite.id])
-          );
-          setError(`New articles found!`);
-        }
+        toast({
+          title: "New Content Found",
+          description: `Found ${updatedArticles.length} new articles!`,
+        });
       }
     },
     onError: (error) => {
       console.error("Failed to refresh website:", error);
-      setError("Failed to refresh website");
+      toast({
+        title: "Error",
+        description: "Failed to refresh website. Please try again.",
+        variant: "destructive",
+      });
     },
   });
 
   const deleteWebsiteMutation = useMutation({
-    mutationFn: deleteWebsite,
+    mutationFn: async (websiteId: string) => {
+      const response = await fetch(`/api/websites/${websiteId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to delete website");
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["websites"] });
     },
     onError: (error) => {
       console.error("Failed to delete website:", error);
-      setError("Failed to delete website");
+      toast({
+        title: "Error",
+        description: "Failed to delete website. Please try again.",
+        variant: "destructive",
+      });
     },
   });
 
   const updatePatternsMutation = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       websiteId,
       contentPatterns,
       skipPatterns,
@@ -160,9 +193,32 @@ export function CompetitorList({
       websiteId: string;
       contentPatterns: string[];
       skipPatterns: string[];
-    }) => updateWebsitePatterns(websiteId, contentPatterns, skipPatterns),
+    }) => {
+      const response = await fetch(`/api/websites/${websiteId}/patterns`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          customContentPatterns: contentPatterns,
+          customSkipPatterns: skipPatterns,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error("Failed to update patterns");
+      }
+      return response.json();
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["websites"] });
+    },
+    onError: (error) => {
+      console.error("Failed to update patterns:", error);
+      toast({
+        title: "Error",
+        description: "Failed to update patterns. Please try again.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -225,11 +281,11 @@ export function CompetitorList({
         newContentPattern.trim(),
       ];
 
-      const updatedWebsite = await updateWebsitePatterns(
+      const updatedWebsite = await updatePatternsMutation.mutate({
         websiteId,
-        updatedPatterns,
-        website.customSkipPatterns
-      );
+        contentPatterns: updatedPatterns,
+        skipPatterns: website.customSkipPatterns,
+      });
 
       queryClient.setQueryData(
         ["websites", categoryId, sortOrder],
@@ -256,11 +312,11 @@ export function CompetitorList({
         newSkipPattern.trim(),
       ];
 
-      const updatedWebsite = await updateWebsitePatterns(
+      const updatedWebsite = await updatePatternsMutation.mutate({
         websiteId,
-        website.customContentPatterns,
-        updatedPatterns
-      );
+        contentPatterns: website.customContentPatterns,
+        skipPatterns: updatedPatterns,
+      });
 
       queryClient.setQueryData(
         ["websites", categoryId, sortOrder],
@@ -294,11 +350,11 @@ export function CompetitorList({
           ? website.customSkipPatterns?.filter((p) => p !== pattern)
           : website.customSkipPatterns;
 
-      const updatedWebsite = await updateWebsitePatterns(
+      const updatedWebsite = await updatePatternsMutation.mutate({
         websiteId,
-        updatedContentPatterns,
-        updatedSkipPatterns
-      );
+        contentPatterns: updatedContentPatterns,
+        skipPatterns: updatedSkipPatterns,
+      });
 
       queryClient.setQueryData(
         ["websites", categoryId, sortOrder],
@@ -382,42 +438,59 @@ export function CompetitorList({
   };
 
   const handleRefreshAll = async () => {
-    if (refreshingAll || !websites.length) return;
+    if (refreshingAll) return;
 
     setRefreshingAll(true);
     setRefreshProgress(0);
-    setSitesWithNewContent(new Set());
-    setNewArticles({});
-    setExpandedNewArticles(new Set());
     setStartTime(new Date());
-
-    const total = websites.length;
-    let completed = 0;
+    setError(null);
 
     try {
-      await Promise.all(
-        websites.map(async (website) => {
-          try {
-            await updateWebsiteMutation.mutateAsync(website.id);
+      const total = websites.length;
+      let completed = 0;
+
+      // Process websites in batches of 3 to avoid rate limiting
+      for (let i = 0; i < websites.length; i += 3) {
+        const batch = websites.slice(i, i + 3);
+        await Promise.all(
+          batch.map(async (website) => {
+            try {
+              await updateWebsiteMutation.mutateAsync(website.id);
+            } catch (error) {
+              console.error(`Failed to update website ${website.id}:`, error);
+            }
             completed++;
             setRefreshProgress((completed / total) * 100);
+          })
+        );
 
-            if (startTime) {
-              const elapsed = new Date().getTime() - startTime.getTime();
-              const remaining = (elapsed / completed) * (total - completed);
-              setTotalRefreshTime(
-                `${formatDuration(elapsed)} / ~${formatDuration(
-                  remaining
-                )} remaining`
-              );
-            }
-          } catch (err) {
-            console.error(`Failed to refresh ${website.name}:`, err);
-          }
-        })
+        // Add a small delay between batches
+        if (i + 3 < websites.length) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+
+      const endTime = new Date();
+      const duration = formatDuration(
+        Math.floor((endTime.getTime() - (startTime?.getTime() || 0)) / 1000)
       );
+      setTotalRefreshTime(duration);
+
+      toast({
+        title: "Refresh Complete",
+        description: `All websites refreshed in ${duration}`,
+      });
+    } catch (error) {
+      console.error("Failed to refresh all websites:", error);
+      toast({
+        title: "Error",
+        description:
+          "Failed to refresh all websites. Some updates may have failed.",
+        variant: "destructive",
+      });
     } finally {
       setRefreshingAll(false);
+      setRefreshProgress(0);
       setStartTime(null);
     }
   };
@@ -486,14 +559,19 @@ export function CompetitorList({
             <Button
               variant="outline"
               onClick={handleRefreshAll}
-              disabled={refreshingAll || !websites.length}
+              disabled={refreshingAll || isLoading}
             >
-              <RefreshCw
-                className={`w-4 h-4 mr-2 ${
-                  refreshingAll ? "animate-spin" : ""
-                }`}
-              />
-              {refreshingAll ? "Refreshing All..." : "Refresh All"}
+              {refreshingAll ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Refreshing...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Refresh All
+                </>
+              )}
             </Button>
 
             <Select
@@ -620,16 +698,8 @@ export function CompetitorList({
       </div>
 
       {error && (
-        <Alert
-          variant="default"
-          className="max-w-md mx-auto bg-blue-50 border-blue-200"
-        >
-          <div className="flex flex-row items-center gap-2">
-            <InfoIcon className="h-5 w-5 text-blue-600" />
-            <AlertDescription className="text-blue-700">
-              {error}
-            </AlertDescription>
-          </div>
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 

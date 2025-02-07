@@ -1,6 +1,7 @@
 import { supabase, supabaseAdmin } from "@/lib/supabase";
 import { MonitoringRule, SocialMention } from "@/lib/types/monitoring";
 import { Resend } from "resend";
+import { Article } from "@/lib/types";
 
 function normalizeUrl(url: string): string {
   try {
@@ -33,17 +34,23 @@ function normalizeUrl(url: string): string {
 }
 
 export class MonitoringService {
-  private resend: Resend;
+  private resend: Resend | null = null;
   private notificationCache: Map<string, number> = new Map();
   private NOTIFICATION_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
   private cleanupInterval: NodeJS.Timeout;
 
   constructor() {
-    console.log(
-      "Initializing Resend with API key:",
-      process.env.RESEND_API_KEY?.substring(0, 5) + "..."
-    );
-    this.resend = new Resend(process.env.RESEND_API_KEY);
+    if (!process.env.RESEND_API_KEY) {
+      console.warn(
+        "RESEND_API_KEY not set - email notifications will be disabled"
+      );
+    } else {
+      console.log(
+        "Initializing Resend with API key:",
+        process.env.RESEND_API_KEY?.substring(0, 5) + "..."
+      );
+      this.resend = new Resend(process.env.RESEND_API_KEY);
+    }
 
     // Start periodic cache cleanup
     this.cleanupInterval = setInterval(() => {
@@ -105,9 +112,9 @@ export class MonitoringService {
   }
 
   private async sendEmail(to: string, subject: string, content: string) {
-    if (!process.env.RESEND_API_KEY) {
-      console.error("No Resend API key found!");
-      throw new Error("Email service not configured - missing API key");
+    if (!this.resend) {
+      console.error("No Resend client available");
+      throw new Error("Email service not configured");
     }
 
     try {
@@ -141,6 +148,123 @@ export class MonitoringService {
     }
   }
 
+  async handleWebsiteUpdate(
+    websiteId: string,
+    newArticles: Article[]
+  ): Promise<void> {
+    console.log(
+      `Handling update for website ${websiteId} with ${newArticles.length} new articles`
+    );
+
+    try {
+      // Get website details with monitoring rules
+      const { data: website, error: websiteError } = await supabase
+        .from("websites")
+        .select(
+          `
+          *,
+          monitoring_rules (
+            id,
+            enabled,
+            type,
+            notify_email,
+            threshold,
+            keyword
+          )
+        `
+        )
+        .eq("id", websiteId)
+        .single();
+
+      if (websiteError) {
+        console.error("Error fetching website details:", websiteError);
+        throw new Error("Failed to fetch website details");
+      }
+
+      if (!website) {
+        console.error("Website not found:", websiteId);
+        return;
+      }
+
+      // Get active monitoring rules
+      const activeRules = (
+        website.monitoring_rules as MonitoringRule[]
+      )?.filter((rule) => rule.enabled);
+
+      if (!activeRules?.length) {
+        console.log("No active monitoring rules found");
+        return;
+      }
+
+      console.log(`Found ${activeRules.length} active monitoring rules`);
+
+      // Process each rule
+      for (const rule of activeRules) {
+        try {
+          switch (rule.type) {
+            case "ARTICLE_COUNT":
+              if (newArticles.length >= rule.threshold) {
+                await this.sendNotification(
+                  rule.notify_email,
+                  website.url,
+                  newArticles.map((a) => a.url)
+                );
+              }
+              break;
+
+            case "KEYWORD":
+              if (rule.keyword) {
+                const matchingArticles = newArticles.filter(
+                  (article) =>
+                    article.title
+                      .toLowerCase()
+                      .includes(rule.keyword!.toLowerCase()) ||
+                    (article.summary &&
+                      article.summary
+                        .toLowerCase()
+                        .includes(rule.keyword!.toLowerCase()))
+                );
+
+                if (matchingArticles.length > 0) {
+                  await this.sendNotification(
+                    rule.notify_email,
+                    website.url,
+                    matchingArticles.map((a) => a.url)
+                  );
+                }
+              }
+              break;
+
+            case "CONTENT_CHANGE":
+              // Content change is already handled by the threshold
+              if (newArticles.length > 0) {
+                await this.sendNotification(
+                  rule.notify_email,
+                  website.url,
+                  newArticles.map((a) => a.url)
+                );
+              }
+              break;
+
+            default:
+              console.log(`Unsupported rule type: ${rule.type}`);
+          }
+
+          // Update rule's last triggered timestamp
+          await supabase
+            .from("monitoring_rules")
+            .update({ last_triggered: new Date().toISOString() })
+            .eq("id", rule.id);
+        } catch (error) {
+          console.error(`Error processing rule ${rule.id}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error("Error handling website update:", error);
+      throw error;
+    }
+  }
+
   async sendNotification(to: string, websiteUrl: string, newLinks: string[]) {
     console.log("Starting sendNotification with:", {
       to,
@@ -154,11 +278,9 @@ export class MonitoringService {
       return;
     }
 
-    if (!process.env.RESEND_API_KEY) {
-      console.error(
-        "RESEND_API_KEY is not set! Cannot send email notification."
-      );
-      throw new Error("Email service not configured - missing RESEND_API_KEY");
+    if (!this.resend) {
+      console.warn("Email service not configured - skipping notification");
+      return;
     }
 
     if (newLinks.length === 0) {
@@ -166,7 +288,10 @@ export class MonitoringService {
       return;
     }
 
-    const formattedLinks = newLinks
+    // Normalize links to prevent duplicates
+    const normalizedLinks = Array.from(new Set(newLinks.map(normalizeUrl)));
+
+    const formattedLinks = normalizedLinks
       .map((link) => {
         const titleMatch = link.match(/\/([^\/]+)$/);
         const title = titleMatch
@@ -182,48 +307,32 @@ export class MonitoringService {
           month: "long",
           year: "numeric",
         });
-        // Use a slightly earlier time for publication (1 hour ago)
-        const publishedTime = new Date(Date.now() - 3600000).toLocaleString(
-          "en-GB",
-          {
-            hour: "2-digit",
-            minute: "2-digit",
-            day: "numeric",
-            month: "long",
-            year: "numeric",
-          }
-        );
 
         return `
           <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #eee; border-radius: 5px; background: #fff;">
             <h3 style="margin: 0 0 10px 0; color: #0070f3;">${title}</h3>
-            <p style="margin: 5px 0; color: #666;">First detected: ${detectionTime}</p>
-            <p style="margin: 5px 0; color: #666;">Published: ${publishedTime}</p>
-            <p style="margin: 5px 0; color: #666;">Location: ${link}</p>
+            <p style="margin: 5px 0; color: #666;">Detected: ${detectionTime}</p>
+            <p style="margin: 5px 0; color: #666;">URL: ${link}</p>
             <p style="margin: 10px 0;">
-              <a href="${link}" style="background: #0070f3; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px; display: inline-block;">Visit Article</a>
+              <a href="${link}" style="background: #0070f3; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px; display: inline-block;">View Article</a>
             </p>
           </div>
         `;
       })
       .join("");
 
-    console.log("Attempting to send email notification...");
-
     try {
       const result = await this.sendEmail(
         to,
-        `${websiteUrl}: ${newLinks.length} New Article${
-          newLinks.length === 1 ? "" : "s"
-        } Found`,
+        `New Content Alert: ${websiteUrl}`,
         `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f9f9f9;">
             <h2 style="color: #333; border-bottom: 2px solid #0070f3; padding-bottom: 10px; margin-top: 0;">
-              New Content on ${websiteUrl}
+              Content Update for ${websiteUrl}
             </h2>
             <p style="color: #666; margin: 15px 0;">
-              We've detected ${newLinks.length} new article${
-          newLinks.length === 1 ? "" : "s"
+              We've detected ${normalizedLinks.length} new article${
+          normalizedLinks.length === 1 ? "" : "s"
         }:
             </p>
             ${formattedLinks}
@@ -236,15 +345,15 @@ export class MonitoringService {
           </div>
         `
       );
-      console.log("Email notification sent successfully:", result);
 
       // Update cache after successful send
-      this.updateNotificationCache(to, websiteUrl, newLinks);
+      this.updateNotificationCache(to, websiteUrl, normalizedLinks);
 
       return result;
     } catch (error) {
       console.error("Failed to send email notification:", error);
-      throw error;
+      // Don't throw here to prevent breaking the monitoring flow
+      // Just log the error and continue
     }
   }
 
